@@ -5,6 +5,7 @@ use std::path::Path;
 fn repository_includes_open_source_project_scaffolding() {
     for relative_path in [
         ".github/ISSUE_TEMPLATE/bug_report.md",
+        ".github/ISSUE_TEMPLATE/config.yml",
         ".github/ISSUE_TEMPLATE/feature_request.md",
         ".github/PULL_REQUEST_TEMPLATE.md",
         ".github/workflows/build.yml",
@@ -14,6 +15,7 @@ fn repository_includes_open_source_project_scaffolding() {
         "SECURITY.md",
         "LICENSE",
         "Makefile",
+        "scripts/release_notes.py",
     ] {
         assert!(
             Path::new(relative_path).exists(),
@@ -38,6 +40,9 @@ fn workflows_and_readme_are_aligned_with_codex_threads() {
         fs::read_to_string(".github/workflows/release.yml").expect("release workflow should exist");
     assert!(release.contains("BIN_NAME: codex-threads"));
     assert!(release.contains("gh release create"));
+    assert!(release.contains("Generate release notes body"));
+    assert!(release.contains("milestone"));
+    assert!(release.contains("scripts/release_notes.py"));
     assert!(release.contains("x86_64-apple-darwin"));
     assert!(release.contains("codex-threads-macos-x64.tar.gz"));
     assert!(!release.contains("x86_64-pc-windows-msvc"));
@@ -53,4 +58,24 @@ fn workflows_and_readme_are_aligned_with_codex_threads() {
     assert!(!release.contains("if: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}"));
     assert!(!release.contains("render_homebrew_formula.py"));
     assert!(!release.contains("Checkout Homebrew tap"));
+}
+
+#[test]
+fn issue_templates_default_to_fanbuz_and_use_chinese_guidance() {
+    let feature = fs::read_to_string(".github/ISSUE_TEMPLATE/feature_request.md")
+        .expect("feature issue template should exist");
+    assert!(feature.contains("assignees: fanbuz"));
+    assert!(feature.contains("当前目标"));
+    assert!(feature.contains("验收口径"));
+
+    let bug = fs::read_to_string(".github/ISSUE_TEMPLATE/bug_report.md")
+        .expect("bug issue template should exist");
+    assert!(bug.contains("assignees: fanbuz"));
+    assert!(bug.contains("问题描述"));
+    assert!(bug.contains("复现步骤"));
+
+    let config = fs::read_to_string(".github/ISSUE_TEMPLATE/config.yml")
+        .expect("issue template config should exist");
+    assert!(config.contains("blank_issues_enabled: false"));
+    assert!(config.contains("fanbuz/codex-threads"));
 }

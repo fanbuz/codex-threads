@@ -1,35 +1,35 @@
 ---
-name: Bug report
-about: Report a reproducible problem
-title: "[Bug] "
+name: 缺陷反馈
+about: 提交一个可复现的问题
+title: ""
 labels: bug
-assignees: ""
+assignees: fanbuz
 ---
 
-## Description
+## 问题描述
 
-Describe the problem clearly.
+请直接描述当前仍存在的问题，不要只贴历史讨论。
 
-## Steps to reproduce
+## 复现步骤
 
 1.
 2.
 3.
 
-## Expected behavior
+## 期望行为
 
-What should have happened?
+问题修复后应该表现成什么样。
 
-## Actual behavior
+## 实际行为
 
-What happened instead?
+当前实际发生了什么，最好带上关键现象或报错。
 
-## Environment
+## 环境信息
 
-- OS:
-- Rust version:
-- `codex-threads` version or commit:
+- 操作系统：
+- Rust 版本：
+- `codex-threads` 版本或 commit：
 
-## Additional context
+## 补充信息
 
-Add logs, session examples, or screenshots if useful. Please redact secrets.
+如有日志、命令输出、会话片段或截图，请补充；注意先脱敏。

@@ -30,6 +30,13 @@ If you add or change a command, include:
 - JSON output and search/read behavior coverage
 - README command surface updates when relevant
 
+## Issue and release conventions
+
+- 默认使用中文编写 issue 标题、issue 正文和 commit message
+- issue 标题只描述任务本身，不要把版本号直接写进标题
+- 版本归属通过 GitHub milestone 管理，例如 `0.0.3`
+- 提交信息请显式关联 issue 编号，便于 release notes 汇总关联 issue
+
 ## Style
 
 - Keep CLI output stable and machine-readable

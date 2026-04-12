@@ -1,23 +1,27 @@
 ---
-name: Feature request
-about: Suggest an improvement
-title: "[Feature] "
+name: 功能需求
+about: 提交一个功能改进或新能力建议
+title: ""
 labels: enhancement
-assignees: ""
+assignees: fanbuz
 ---
 
-## Problem
+## 当前目标
 
-What workflow is currently awkward or missing?
+请用当前态描述这条需求最终要解决什么问题。
 
-## Proposed solution
+## 当前范围
 
-What should `codex-threads` do?
+请明确本次想覆盖的命令、场景或边界，不要写历史拆分过程。
 
-## Alternatives considered
+## 建议方案
 
-What other options did you look at?
+请描述你期望的实现方向、输出形态或交互方式。
 
-## Additional context
+## 验收口径
 
-Anything else maintainers should know?
+请列出完成后应该满足的结果，例如命令输出、行为变化、验证方式等。
+
+## 补充信息
+
+可补充示例命令、上下文、相关链接或已有讨论。

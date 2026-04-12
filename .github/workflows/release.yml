@@ -103,6 +103,35 @@ jobs:
         with:
           path: release-assets
 
+      - name: Determine previous release tag
+        id: previous_tag
+        shell: bash
+        env:
+          TAG_NAME: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          previous_tag="$(git tag --list 'v*' --sort=-version:refname | grep -Fxv "${TAG_NAME}" | head -n 1 || true)"
+          echo "value=${previous_tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate release notes body from milestone and issue refs
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.event.inputs.tag || github.ref_name }}
+          PREVIOUS_TAG: ${{ steps.previous_tag.outputs.value }}
+        run: |
+          if [ -n "${PREVIOUS_TAG}" ]; then
+            python3 scripts/release_notes.py \
+              --repo "${GITHUB_REPOSITORY}" \
+              --tag "${TAG_NAME}" \
+              --previous-tag "${PREVIOUS_TAG}" \
+              --output release-notes.md
+          else
+            python3 scripts/release_notes.py \
+              --repo "${GITHUB_REPOSITORY}" \
+              --tag "${TAG_NAME}" \
+              --output release-notes.md
+          fi
+
       - name: Create or update GitHub release
         shell: bash
         env:
@@ -118,8 +147,9 @@ jobs:
 
           if gh release view "$TAG_NAME" --repo "$GH_REPO" >/dev/null 2>&1; then
             gh release upload "$TAG_NAME" "${files[@]}" --clobber --repo "$GH_REPO"
+            gh release edit "$TAG_NAME" --title "$TAG_NAME" --notes-file release-notes.md --repo "$GH_REPO"
           else
-            gh release create "$TAG_NAME" "${files[@]}" --title "$TAG_NAME" --generate-notes --verify-tag --repo "$GH_REPO"
+            gh release create "$TAG_NAME" "${files[@]}" --title "$TAG_NAME" --notes-file release-notes.md --verify-tag --repo "$GH_REPO"
           fi
 
   notify-homebrew-tap:
