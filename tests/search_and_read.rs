@@ -329,6 +329,63 @@ fn search_preserves_symbol_bearing_queries() {
 }
 
 #[test]
+fn search_expands_slash_queries_without_breaking_literal_symbols() {
+    let (_tmp, sessions_dir, index_dir) = seed_index();
+
+    let threads_output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "threads",
+            "search",
+            "CLI/search",
+            "--limit",
+            "5",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let threads_json: Value = serde_json::from_slice(&threads_output).unwrap();
+    assert_eq!(threads_json["count"], 1);
+    assert_eq!(threads_json["results"][0]["session_id"], "session-alpha");
+}
+
+#[test]
+fn search_escapes_like_wildcards_in_literal_queries() {
+    let (_tmp, sessions_dir, index_dir) = seed_index();
+
+    let messages_output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "messages",
+            "search",
+            "%",
+            "--limit",
+            "5",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let messages_json: Value = serde_json::from_slice(&messages_output).unwrap();
+    assert_eq!(messages_json["count"], 0);
+}
+
+#[test]
 fn thread_message_and_event_reads_honor_limits() {
     let (_tmp, sessions_dir, index_dir) = seed_index();
 

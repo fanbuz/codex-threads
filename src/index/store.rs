@@ -288,7 +288,20 @@ impl Store {
         };
 
         if self.fts_available {
-            for fts_query in fts_query_candidates(original_query, &normalized_query) {
+            if let Ok(results) = self.search_threads_fts(original_query, limit) {
+                if !results.is_empty() {
+                    return Ok(results);
+                }
+            }
+        }
+
+        let literal_results = self.search_threads_like_literal(original_query, limit)?;
+        if !literal_results.is_empty() {
+            return Ok(literal_results);
+        }
+
+        if self.fts_available && should_expand_query_terms(original_query, &query_terms) {
+            if let Some(fts_query) = expanded_fts_query(original_query, &normalized_query) {
                 if let Ok(results) = self.search_threads_fts(&fts_query, limit) {
                     if !results.is_empty() {
                         return Ok(results);
@@ -297,7 +310,7 @@ impl Store {
             }
         }
 
-        self.search_threads_like(original_query, &query_terms, &normalized_query, limit)
+        self.search_threads_like(&query_terms, &normalized_query, limit)
     }
 
     pub fn search_messages(&self, query: &str, limit: usize) -> Result<Vec<MessageSearchHit>> {
@@ -313,7 +326,20 @@ impl Store {
         };
 
         if self.fts_available {
-            for fts_query in fts_query_candidates(original_query, &normalized_query) {
+            if let Ok(results) = self.search_messages_fts(original_query, limit) {
+                if !results.is_empty() {
+                    return Ok(results);
+                }
+            }
+        }
+
+        let literal_results = self.search_messages_like_literal(original_query, limit)?;
+        if !literal_results.is_empty() {
+            return Ok(literal_results);
+        }
+
+        if self.fts_available && should_expand_query_terms(original_query, &query_terms) {
+            if let Some(fts_query) = expanded_fts_query(original_query, &normalized_query) {
                 if let Ok(results) = self.search_messages_fts(&fts_query, limit) {
                     if !results.is_empty() {
                         return Ok(results);
@@ -322,7 +348,7 @@ impl Store {
             }
         }
 
-        self.search_messages_like(original_query, &query_terms, &normalized_query, limit)
+        self.search_messages_like(&query_terms, &normalized_query, limit)
     }
 
     pub fn read_thread(&self, identifier: &str, limit: Option<usize>) -> Result<ThreadRead> {
@@ -438,19 +464,15 @@ impl Store {
 
     fn search_threads_like(
         &self,
-        original_query: &str,
         query_terms: &[String],
         normalized_query: &str,
         limit: usize,
     ) -> Result<Vec<ThreadSearchHit>> {
-        if should_expand_query_terms(original_query, query_terms) {
-            let results = self.search_threads_like_terms(query_terms, normalized_query, limit)?;
-            if !results.is_empty() {
-                return Ok(results);
-            }
+        if should_expand_query_terms(normalized_query, query_terms) {
+            return self.search_threads_like_terms(query_terms, normalized_query, limit);
         }
 
-        self.search_threads_like_literal(original_query, limit)
+        Ok(Vec::new())
     }
 
     fn search_threads_like_literal(
@@ -458,15 +480,15 @@ impl Store {
         original_query: &str,
         limit: usize,
     ) -> Result<Vec<ThreadSearchHit>> {
-        let pattern = format!("%{}%", original_query);
+        let pattern = like_pattern(original_query);
         let mut stmt = self.conn.prepare(
             r#"
             SELECT session_id, title, cwd, path, message_count, event_count, aggregate_text
             FROM threads
-            WHERE lower(title) LIKE lower(?1)
-                OR lower(ifnull(cwd, '')) LIKE lower(?1)
-                OR lower(path) LIKE lower(?1)
-                OR lower(aggregate_text) LIKE lower(?1)
+            WHERE lower(title) LIKE lower(?1) ESCAPE '\'
+                OR lower(ifnull(cwd, '')) LIKE lower(?1) ESCAPE '\'
+                OR lower(path) LIKE lower(?1) ESCAPE '\'
+                OR lower(aggregate_text) LIKE lower(?1) ESCAPE '\'
             ORDER BY started_at DESC
             LIMIT ?2
             "#,
@@ -521,7 +543,7 @@ impl Store {
         let mut stmt = self.conn.prepare(&sql)?;
         let mut params = query_terms
             .iter()
-            .map(|term| format!("%{}%", term))
+            .map(|term| like_pattern(term))
             .collect::<Vec<_>>();
         params.push(limit.to_string());
 
@@ -580,19 +602,15 @@ impl Store {
 
     fn search_messages_like(
         &self,
-        original_query: &str,
         query_terms: &[String],
         normalized_query: &str,
         limit: usize,
     ) -> Result<Vec<MessageSearchHit>> {
-        if should_expand_query_terms(original_query, query_terms) {
-            let results = self.search_messages_like_terms(query_terms, normalized_query, limit)?;
-            if !results.is_empty() {
-                return Ok(results);
-            }
+        if should_expand_query_terms(normalized_query, query_terms) {
+            return self.search_messages_like_terms(query_terms, normalized_query, limit);
         }
 
-        self.search_messages_like_literal(original_query, limit)
+        Ok(Vec::new())
     }
 
     fn search_messages_like_literal(
@@ -600,13 +618,13 @@ impl Store {
         original_query: &str,
         limit: usize,
     ) -> Result<Vec<MessageSearchHit>> {
-        let pattern = format!("%{}%", original_query);
+        let pattern = like_pattern(original_query);
         let mut stmt = self.conn.prepare(
             r#"
             SELECT m.session_id, t.title, m.timestamp, m.role, m.text
             FROM messages m
             LEFT JOIN threads t ON t.session_id = m.session_id
-            WHERE lower(m.text) LIKE lower(?1)
+            WHERE lower(m.text) LIKE lower(?1) ESCAPE '\'
             ORDER BY m.timestamp DESC
             LIMIT ?2
             "#,
@@ -637,7 +655,7 @@ impl Store {
         let filters = query_terms
             .iter()
             .enumerate()
-            .map(|(idx, _)| format!("lower(m.text) LIKE lower(?{})", idx + 1))
+            .map(|(idx, _)| format!("lower(m.text) LIKE lower(?{}) ESCAPE '\\'", idx + 1))
             .collect::<Vec<_>>()
             .join(" AND ");
         let sql = format!(
@@ -655,7 +673,7 @@ impl Store {
         let mut stmt = self.conn.prepare(&sql)?;
         let mut params = query_terms
             .iter()
-            .map(|term| format!("%{}%", term))
+            .map(|term| like_pattern(term))
             .collect::<Vec<_>>();
         params.push(limit.to_string());
 
@@ -837,26 +855,30 @@ impl Store {
     }
 }
 
-fn fts_query_candidates(original_query: &str, normalized_query: &str) -> Vec<String> {
-    let mut candidates = Vec::with_capacity(2);
-    if !original_query.is_empty() {
-        candidates.push(original_query.to_string());
-    }
+fn expanded_fts_query(original_query: &str, normalized_query: &str) -> Option<String> {
     if !normalized_query.is_empty() && normalized_query != original_query {
-        candidates.push(normalized_query.to_string());
+        Some(normalized_query.to_string())
+    } else {
+        None
     }
-    candidates
 }
 
-fn should_expand_query_terms(original_query: &str, query_terms: &[String]) -> bool {
-    if query_terms.len() > 1 {
-        return true;
-    }
+fn should_expand_query_terms(normalized_query: &str, query_terms: &[String]) -> bool {
+    !normalized_query.is_empty() && !query_terms.is_empty()
+}
 
-    query_terms
-        .first()
-        .map(|term| term != original_query)
-        .unwrap_or(false)
+fn like_pattern(value: &str) -> String {
+    format!("%{}%", escape_like(value))
+}
+
+fn escape_like(value: &str) -> String {
+    value
+        .chars()
+        .flat_map(|ch| match ch {
+            '%' | '_' | '\\' => ['\\', ch].into_iter().collect::<Vec<_>>(),
+            _ => [ch].into_iter().collect::<Vec<_>>(),
+        })
+        .collect()
 }
 
 fn replace_session(
