@@ -20,25 +20,19 @@ pub fn run(cli: Cli) -> Result<Rendered> {
         Command::Sync => run_with_timing(|| sync::run(&mut store, &sessions_dir, &index_dir)),
         Command::Status => sync::status(&store),
         Command::Threads { command } => match command {
-            ThreadsCommand::Search(args) => {
-                run_with_timing(|| search::threads(&store, &args.query, args.limit))
-            }
+            ThreadsCommand::Search(args) => run_with_timing(|| search::threads(&store, &args)),
             ThreadsCommand::Read(args) => {
                 run_with_timing(|| read::thread(&store, &args.session_id, args.limit))
             }
         },
         Command::Messages { command } => match command {
-            MessagesCommand::Search(args) => {
-                run_with_timing(|| search::messages(&store, &args.query, args.limit))
-            }
+            MessagesCommand::Search(args) => run_with_timing(|| search::messages(&store, &args)),
             MessagesCommand::Read(args) => {
                 run_with_timing(|| read::messages(&store, &args.session_id, args.limit))
             }
         },
         Command::Events { command } => match command {
-            EventsCommand::Search(args) => {
-                run_with_timing(|| search::events(&store, &args.query, args.limit))
-            }
+            EventsCommand::Search(args) => run_with_timing(|| search::events(&store, &args)),
             EventsCommand::Read(args) => {
                 run_with_timing(|| read::events(&store, &args.session_id, args.limit))
             }

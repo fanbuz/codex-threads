@@ -191,6 +191,27 @@ codex-threads status
 - `--sessions-dir PATH` 覆盖默认会话目录
 - `--index-dir PATH` 覆盖默认索引目录
 
+搜索过滤参数：
+
+- 三类 `search` 都支持：`--since`、`--until`、`--session`
+- `messages search` 额外支持：`--role`
+- `threads search` 额外支持：`--cwd`、`--path`
+- `events search` 额外支持：`--event-type`
+
+示例：
+
+```bash
+codex-threads messages search "CLI" --role user --session session-alpha
+codex-threads threads search "search fallback" --cwd alpha-repo --since 2026-04-12T09:00:00Z
+codex-threads --json events search "agent" --event-type agent_reasoning --until 2026-04-12T11:00:00Z
+```
+
+说明：
+
+- 时间过滤按 RFC3339 时间字符串比较，适合直接复制会话里的时间戳来筛选
+- `--cwd` 和 `--path` 是大小写不敏感的模糊匹配
+- `--json` 输出会额外回显本次命中的 `filters`，方便脚本和 agent 继续处理
+
 输出约定：
 
 - 默认命令行输出会在 `sync`、`search`、`read` 等操作末尾追加 `耗时: ...`
