@@ -49,3 +49,37 @@ fn nested_help_shows_subcommand_descriptions() {
         ))
         .stdout(predicate::str::contains("read    读取指定线程里的事件记录"));
 }
+
+#[test]
+fn search_help_shows_filter_options() {
+    Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args(["messages", "search", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--since <SINCE>"))
+        .stdout(predicate::str::contains("--until <UNTIL>"))
+        .stdout(predicate::str::contains("--session <SESSION>"))
+        .stdout(predicate::str::contains("--role <ROLE>"));
+
+    Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args(["threads", "search", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--cwd <CWD>"))
+        .stdout(predicate::str::contains("--path <PATH>"))
+        .stdout(predicate::str::contains("--since <SINCE>"))
+        .stdout(predicate::str::contains("--until <UNTIL>"))
+        .stdout(predicate::str::contains("--session <SESSION>"));
+
+    Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args(["events", "search", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--event-type <EVENT_TYPE>"))
+        .stdout(predicate::str::contains("--since <SINCE>"))
+        .stdout(predicate::str::contains("--until <UNTIL>"))
+        .stdout(predicate::str::contains("--session <SESSION>"));
+}

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
-use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use rusqlite::{params, types::Value, Connection, OptionalExtension, Transaction};
 use serde::Serialize;
 use walkdir::WalkDir;
 
@@ -74,6 +74,20 @@ pub struct ThreadSearchHit {
     pub snippet: String,
 }
 
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ThreadSearchFilters {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub since: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub until: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct MessageRecord {
     pub session_id: String,
@@ -92,6 +106,18 @@ pub struct MessageSearchHit {
     pub snippet: String,
 }
 
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct MessageSearchFilters {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub since: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub until: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct EventRecord {
     pub session_id: String,
@@ -108,6 +134,18 @@ pub struct EventSearchHit {
     pub event_type: String,
     pub summary: String,
     pub snippet: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct EventSearchFilters {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub since: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub until: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -285,7 +323,12 @@ impl Store {
         })
     }
 
-    pub fn search_threads(&self, query: &str, limit: usize) -> Result<Vec<ThreadSearchHit>> {
+    pub fn search_threads(
+        &self,
+        query: &str,
+        limit: usize,
+        filters: &ThreadSearchFilters,
+    ) -> Result<Vec<ThreadSearchHit>> {
         let original_query = query.trim();
         if original_query.is_empty() {
             return Ok(Vec::new());
@@ -298,21 +341,21 @@ impl Store {
         };
 
         if self.fts_available {
-            if let Ok(results) = self.search_threads_fts(original_query, limit) {
+            if let Ok(results) = self.search_threads_fts(original_query, limit, filters) {
                 if !results.is_empty() {
                     return Ok(results);
                 }
             }
         }
 
-        let literal_results = self.search_threads_like_literal(original_query, limit)?;
+        let literal_results = self.search_threads_like_literal(original_query, limit, filters)?;
         if !literal_results.is_empty() {
             return Ok(literal_results);
         }
 
         if self.fts_available && should_expand_query_terms(original_query, &query_terms) {
             if let Some(fts_query) = expanded_fts_query(original_query, &normalized_query) {
-                if let Ok(results) = self.search_threads_fts(&fts_query, limit) {
+                if let Ok(results) = self.search_threads_fts(&fts_query, limit, filters) {
                     if !results.is_empty() {
                         return Ok(results);
                     }
@@ -320,10 +363,15 @@ impl Store {
             }
         }
 
-        self.search_threads_like(&query_terms, &normalized_query, limit)
+        self.search_threads_like(&query_terms, &normalized_query, limit, filters)
     }
 
-    pub fn search_messages(&self, query: &str, limit: usize) -> Result<Vec<MessageSearchHit>> {
+    pub fn search_messages(
+        &self,
+        query: &str,
+        limit: usize,
+        filters: &MessageSearchFilters,
+    ) -> Result<Vec<MessageSearchHit>> {
         let original_query = query.trim();
         if original_query.is_empty() {
             return Ok(Vec::new());
@@ -336,21 +384,21 @@ impl Store {
         };
 
         if self.fts_available {
-            if let Ok(results) = self.search_messages_fts(original_query, limit) {
+            if let Ok(results) = self.search_messages_fts(original_query, limit, filters) {
                 if !results.is_empty() {
                     return Ok(results);
                 }
             }
         }
 
-        let literal_results = self.search_messages_like_literal(original_query, limit)?;
+        let literal_results = self.search_messages_like_literal(original_query, limit, filters)?;
         if !literal_results.is_empty() {
             return Ok(literal_results);
         }
 
         if self.fts_available && should_expand_query_terms(original_query, &query_terms) {
             if let Some(fts_query) = expanded_fts_query(original_query, &normalized_query) {
-                if let Ok(results) = self.search_messages_fts(&fts_query, limit) {
+                if let Ok(results) = self.search_messages_fts(&fts_query, limit, filters) {
                     if !results.is_empty() {
                         return Ok(results);
                     }
@@ -358,10 +406,15 @@ impl Store {
             }
         }
 
-        self.search_messages_like(&query_terms, &normalized_query, limit)
+        self.search_messages_like(&query_terms, &normalized_query, limit, filters)
     }
 
-    pub fn search_events(&self, query: &str, limit: usize) -> Result<Vec<EventSearchHit>> {
+    pub fn search_events(
+        &self,
+        query: &str,
+        limit: usize,
+        filters: &EventSearchFilters,
+    ) -> Result<Vec<EventSearchHit>> {
         let original_query = query.trim();
         if original_query.is_empty() {
             return Ok(Vec::new());
@@ -374,21 +427,21 @@ impl Store {
         };
 
         if self.fts_available {
-            if let Ok(results) = self.search_events_fts(original_query, limit) {
+            if let Ok(results) = self.search_events_fts(original_query, limit, filters) {
                 if !results.is_empty() {
                     return Ok(results);
                 }
             }
         }
 
-        let literal_results = self.search_events_like_literal(original_query, limit)?;
+        let literal_results = self.search_events_like_literal(original_query, limit, filters)?;
         if !literal_results.is_empty() {
             return Ok(literal_results);
         }
 
         if self.fts_available && should_expand_query_terms(original_query, &query_terms) {
             if let Some(fts_query) = expanded_fts_query(original_query, &normalized_query) {
-                if let Ok(results) = self.search_events_fts(&fts_query, limit) {
+                if let Ok(results) = self.search_events_fts(&fts_query, limit, filters) {
                     if !results.is_empty() {
                         return Ok(results);
                     }
@@ -396,7 +449,7 @@ impl Store {
             }
         }
 
-        self.search_events_like(&query_terms, &normalized_query, limit)
+        self.search_events_like(&query_terms, &normalized_query, limit, filters)
     }
 
     pub fn read_thread(&self, identifier: &str, limit: Option<usize>) -> Result<ThreadRead> {
@@ -472,8 +525,18 @@ impl Store {
         Ok(count as usize)
     }
 
-    fn search_threads_fts(&self, query: &str, limit: usize) -> Result<Vec<ThreadSearchHit>> {
-        let mut stmt = self.conn.prepare(
+    fn search_threads_fts(
+        &self,
+        query: &str,
+        limit: usize,
+        filters: &ThreadSearchFilters,
+    ) -> Result<Vec<ThreadSearchHit>> {
+        let mut conditions = vec!["threads_fts MATCH ?".to_string()];
+        let mut params = vec![Value::Text(query.to_string())];
+        push_thread_filter_conditions(&mut conditions, &mut params, filters, "t");
+        params.push(Value::Integer(limit as i64));
+
+        let sql = format!(
             r#"
             SELECT
                 t.session_id,
@@ -486,13 +549,15 @@ impl Store {
                 snippet(threads_fts, 4, '[', ']', '…', 12)
             FROM threads_fts
             JOIN threads t ON t.id = threads_fts.rowid
-            WHERE threads_fts MATCH ?1
+            WHERE {}
             ORDER BY bm25(threads_fts)
-            LIMIT ?2
+            LIMIT ?
             "#,
-        )?;
+            conditions.join("\n                AND ")
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
 
-        let rows = stmt.query_map(params![query, limit as i64], |row| {
+        let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
             let aggregate_text: String = row.get(6)?;
             let snippet: Option<String> = row.get(7)?;
             Ok(ThreadSearchHit {
@@ -515,9 +580,10 @@ impl Store {
         query_terms: &[String],
         normalized_query: &str,
         limit: usize,
+        filters: &ThreadSearchFilters,
     ) -> Result<Vec<ThreadSearchHit>> {
         if should_expand_query_terms(normalized_query, query_terms) {
-            return self.search_threads_like_terms(query_terms, normalized_query, limit);
+            return self.search_threads_like_terms(query_terms, normalized_query, limit, filters);
         }
 
         Ok(Vec::new())
@@ -527,22 +593,41 @@ impl Store {
         &self,
         original_query: &str,
         limit: usize,
+        filters: &ThreadSearchFilters,
     ) -> Result<Vec<ThreadSearchHit>> {
+        let mut conditions = vec![r#"
+                (
+                    lower(title) LIKE lower(?) ESCAPE '\'
+                    OR lower(ifnull(cwd, '')) LIKE lower(?) ESCAPE '\'
+                    OR lower(path) LIKE lower(?) ESCAPE '\'
+                    OR lower(aggregate_text) LIKE lower(?) ESCAPE '\'
+                )
+            "#
+        .trim()
+        .to_string()];
         let pattern = like_pattern(original_query);
-        let mut stmt = self.conn.prepare(
+        let mut params = vec![
+            Value::Text(pattern.clone()),
+            Value::Text(pattern.clone()),
+            Value::Text(pattern.clone()),
+            Value::Text(pattern),
+        ];
+        push_thread_filter_conditions(&mut conditions, &mut params, filters, "");
+        params.push(Value::Integer(limit as i64));
+
+        let sql = format!(
             r#"
             SELECT session_id, title, cwd, path, message_count, event_count, aggregate_text
             FROM threads
-            WHERE lower(title) LIKE lower(?1) ESCAPE '\'
-                OR lower(ifnull(cwd, '')) LIKE lower(?1) ESCAPE '\'
-                OR lower(path) LIKE lower(?1) ESCAPE '\'
-                OR lower(aggregate_text) LIKE lower(?1) ESCAPE '\'
+            WHERE {}
             ORDER BY started_at DESC
-            LIMIT ?2
+            LIMIT ?
             "#,
-        )?;
+            conditions.join("\n                AND ")
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
 
-        let rows = stmt.query_map(params![pattern, limit as i64], |row| {
+        let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
             let aggregate_text: String = row.get(6)?;
             Ok(ThreadSearchHit {
                 session_id: row.get(0)?,
@@ -564,38 +649,45 @@ impl Store {
         query_terms: &[String],
         normalized_query: &str,
         limit: usize,
+        filters: &ThreadSearchFilters,
     ) -> Result<Vec<ThreadSearchHit>> {
-        let filters = query_terms
-            .iter()
-            .enumerate()
-            .map(|(idx, _)| {
-                let placeholder = format!("?{}", idx + 1);
-                format!(
-                    "(lower(title) LIKE lower({0}) OR lower(ifnull(cwd, '')) LIKE lower({0}) OR lower(path) LIKE lower({0}) OR lower(aggregate_text) LIKE lower({0}))",
-                    placeholder
+        let mut conditions = Vec::new();
+        let mut params = Vec::new();
+        for term in query_terms {
+            conditions.push(
+                r#"
+                (
+                    lower(title) LIKE lower(?) ESCAPE '\'
+                    OR lower(ifnull(cwd, '')) LIKE lower(?) ESCAPE '\'
+                    OR lower(path) LIKE lower(?) ESCAPE '\'
+                    OR lower(aggregate_text) LIKE lower(?) ESCAPE '\'
                 )
-            })
-            .collect::<Vec<_>>()
-            .join(" AND ");
+                "#
+                .trim()
+                .to_string(),
+            );
+            let pattern = like_pattern(term);
+            params.push(Value::Text(pattern.clone()));
+            params.push(Value::Text(pattern.clone()));
+            params.push(Value::Text(pattern.clone()));
+            params.push(Value::Text(pattern));
+        }
+        push_thread_filter_conditions(&mut conditions, &mut params, filters, "");
+        params.push(Value::Integer(limit as i64));
+
         let sql = format!(
             r#"
             SELECT session_id, title, cwd, path, message_count, event_count, aggregate_text
             FROM threads
-            WHERE {filters}
+            WHERE {}
             ORDER BY started_at DESC
-            LIMIT ?{limit_placeholder}
+            LIMIT ?
             "#,
-            filters = filters,
-            limit_placeholder = query_terms.len() + 1
+            conditions.join("\n                AND ")
         );
         let mut stmt = self.conn.prepare(&sql)?;
-        let mut params = query_terms
-            .iter()
-            .map(|term| like_pattern(term))
-            .collect::<Vec<_>>();
-        params.push(limit.to_string());
 
-        let rows = stmt.query_map(rusqlite::params_from_iter(params.iter()), |row| {
+        let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
             let aggregate_text: String = row.get(6)?;
             Ok(ThreadSearchHit {
                 session_id: row.get(0)?,
@@ -612,8 +704,18 @@ impl Store {
             .map_err(Into::into)
     }
 
-    fn search_messages_fts(&self, query: &str, limit: usize) -> Result<Vec<MessageSearchHit>> {
-        let mut stmt = self.conn.prepare(
+    fn search_messages_fts(
+        &self,
+        query: &str,
+        limit: usize,
+        filters: &MessageSearchFilters,
+    ) -> Result<Vec<MessageSearchHit>> {
+        let mut conditions = vec!["messages_fts MATCH ?".to_string()];
+        let mut params = vec![Value::Text(query.to_string())];
+        push_message_filter_conditions(&mut conditions, &mut params, filters, "m");
+        params.push(Value::Integer(limit as i64));
+
+        let sql = format!(
             r#"
             SELECT
                 m.session_id,
@@ -625,13 +727,15 @@ impl Store {
             FROM messages_fts
             JOIN messages m ON m.id = messages_fts.rowid
             LEFT JOIN threads t ON t.session_id = m.session_id
-            WHERE messages_fts MATCH ?1
+            WHERE {}
             ORDER BY bm25(messages_fts)
-            LIMIT ?2
+            LIMIT ?
             "#,
-        )?;
+            conditions.join("\n                AND ")
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
 
-        let rows = stmt.query_map(params![query, limit as i64], |row| {
+        let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
             let text: String = row.get(4)?;
             let snippet: Option<String> = row.get(5)?;
             Ok(MessageSearchHit {
@@ -648,8 +752,18 @@ impl Store {
             .map_err(Into::into)
     }
 
-    fn search_events_fts(&self, query: &str, limit: usize) -> Result<Vec<EventSearchHit>> {
-        let mut stmt = self.conn.prepare(
+    fn search_events_fts(
+        &self,
+        query: &str,
+        limit: usize,
+        filters: &EventSearchFilters,
+    ) -> Result<Vec<EventSearchHit>> {
+        let mut conditions = vec!["events_fts MATCH ?".to_string()];
+        let mut params = vec![Value::Text(query.to_string())];
+        push_event_filter_conditions(&mut conditions, &mut params, filters, "e");
+        params.push(Value::Integer(limit as i64));
+
+        let sql = format!(
             r#"
             SELECT
                 e.session_id,
@@ -661,13 +775,15 @@ impl Store {
             FROM events_fts
             JOIN events e ON e.id = events_fts.rowid
             LEFT JOIN threads t ON t.session_id = e.session_id
-            WHERE events_fts MATCH ?1
+            WHERE {}
             ORDER BY bm25(events_fts), e.timestamp DESC
-            LIMIT ?2
+            LIMIT ?
             "#,
-        )?;
+            conditions.join("\n                AND ")
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
 
-        let rows = stmt.query_map(params![query, limit as i64], |row| {
+        let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
             let event_type: String = row.get(3)?;
             let summary: String = row.get(4)?;
             let snippet: Option<String> = row.get(5)?;
@@ -691,9 +807,10 @@ impl Store {
         query_terms: &[String],
         normalized_query: &str,
         limit: usize,
+        filters: &MessageSearchFilters,
     ) -> Result<Vec<MessageSearchHit>> {
         if should_expand_query_terms(normalized_query, query_terms) {
-            return self.search_messages_like_terms(query_terms, normalized_query, limit);
+            return self.search_messages_like_terms(query_terms, normalized_query, limit, filters);
         }
 
         Ok(Vec::new())
@@ -704,9 +821,10 @@ impl Store {
         query_terms: &[String],
         normalized_query: &str,
         limit: usize,
+        filters: &EventSearchFilters,
     ) -> Result<Vec<EventSearchHit>> {
         if should_expand_query_terms(normalized_query, query_terms) {
-            return self.search_events_like_terms(query_terms, normalized_query, limit);
+            return self.search_events_like_terms(query_terms, normalized_query, limit, filters);
         }
 
         Ok(Vec::new())
@@ -716,20 +834,27 @@ impl Store {
         &self,
         original_query: &str,
         limit: usize,
+        filters: &MessageSearchFilters,
     ) -> Result<Vec<MessageSearchHit>> {
-        let pattern = like_pattern(original_query);
-        let mut stmt = self.conn.prepare(
+        let mut conditions = vec!["lower(m.text) LIKE lower(?) ESCAPE '\\'".to_string()];
+        let mut params = vec![Value::Text(like_pattern(original_query))];
+        push_message_filter_conditions(&mut conditions, &mut params, filters, "m");
+        params.push(Value::Integer(limit as i64));
+
+        let sql = format!(
             r#"
             SELECT m.session_id, t.title, m.timestamp, m.role, m.text
             FROM messages m
             LEFT JOIN threads t ON t.session_id = m.session_id
-            WHERE lower(m.text) LIKE lower(?1) ESCAPE '\'
+            WHERE {}
             ORDER BY m.timestamp DESC
-            LIMIT ?2
+            LIMIT ?
             "#,
-        )?;
+            conditions.join("\n                AND ")
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
 
-        let rows = stmt.query_map(params![pattern, limit as i64], |row| {
+        let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
             let text: String = row.get(4)?;
             Ok(MessageSearchHit {
                 session_id: row.get(0)?,
@@ -750,33 +875,31 @@ impl Store {
         query_terms: &[String],
         normalized_query: &str,
         limit: usize,
+        filters: &MessageSearchFilters,
     ) -> Result<Vec<MessageSearchHit>> {
-        let filters = query_terms
-            .iter()
-            .enumerate()
-            .map(|(idx, _)| format!("lower(m.text) LIKE lower(?{}) ESCAPE '\\'", idx + 1))
-            .collect::<Vec<_>>()
-            .join(" AND ");
+        let mut conditions = Vec::new();
+        let mut params = Vec::new();
+        for term in query_terms {
+            conditions.push("lower(m.text) LIKE lower(?) ESCAPE '\\'".to_string());
+            params.push(Value::Text(like_pattern(term)));
+        }
+        push_message_filter_conditions(&mut conditions, &mut params, filters, "m");
+        params.push(Value::Integer(limit as i64));
+
         let sql = format!(
             r#"
             SELECT m.session_id, t.title, m.timestamp, m.role, m.text
             FROM messages m
             LEFT JOIN threads t ON t.session_id = m.session_id
-            WHERE {filters}
+            WHERE {}
             ORDER BY m.timestamp DESC
-            LIMIT ?{limit_placeholder}
+            LIMIT ?
             "#,
-            filters = filters,
-            limit_placeholder = query_terms.len() + 1
+            conditions.join("\n                AND ")
         );
         let mut stmt = self.conn.prepare(&sql)?;
-        let mut params = query_terms
-            .iter()
-            .map(|term| like_pattern(term))
-            .collect::<Vec<_>>();
-        params.push(limit.to_string());
 
-        let rows = stmt.query_map(rusqlite::params_from_iter(params.iter()), |row| {
+        let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
             let text: String = row.get(4)?;
             Ok(MessageSearchHit {
                 session_id: row.get(0)?,
@@ -796,21 +919,31 @@ impl Store {
         &self,
         original_query: &str,
         limit: usize,
+        filters: &EventSearchFilters,
     ) -> Result<Vec<EventSearchHit>> {
+        let mut conditions = vec![
+            "(lower(e.event_type) LIKE lower(?) ESCAPE '\\' OR lower(e.summary) LIKE lower(?) ESCAPE '\\')"
+                .to_string(),
+        ];
         let pattern = like_pattern(original_query);
-        let mut stmt = self.conn.prepare(
+        let mut params = vec![Value::Text(pattern.clone()), Value::Text(pattern)];
+        push_event_filter_conditions(&mut conditions, &mut params, filters, "e");
+        params.push(Value::Integer(limit as i64));
+
+        let sql = format!(
             r#"
             SELECT e.session_id, t.title, e.timestamp, e.event_type, e.summary
             FROM events e
             LEFT JOIN threads t ON t.session_id = e.session_id
-            WHERE lower(e.event_type) LIKE lower(?1) ESCAPE '\'
-                OR lower(e.summary) LIKE lower(?1) ESCAPE '\'
+            WHERE {}
             ORDER BY e.timestamp DESC
-            LIMIT ?2
+            LIMIT ?
             "#,
-        )?;
+            conditions.join("\n                AND ")
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
 
-        let rows = stmt.query_map(params![pattern, limit as i64], |row| {
+        let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
             let event_type: String = row.get(3)?;
             let summary: String = row.get(4)?;
             let snippet_source = format!("{} {}", event_type, summary);
@@ -833,39 +966,36 @@ impl Store {
         query_terms: &[String],
         normalized_query: &str,
         limit: usize,
+        filters: &EventSearchFilters,
     ) -> Result<Vec<EventSearchHit>> {
-        let filters = query_terms
-            .iter()
-            .enumerate()
-            .map(|(idx, _)| {
-                let placeholder = format!("?{}", idx + 1);
-                format!(
-                    "(lower(e.event_type) LIKE lower({0}) ESCAPE '\\' OR lower(e.summary) LIKE lower({0}) ESCAPE '\\')",
-                    placeholder
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(" AND ");
+        let mut conditions = Vec::new();
+        let mut params = Vec::new();
+        for term in query_terms {
+            conditions.push(
+                "(lower(e.event_type) LIKE lower(?) ESCAPE '\\' OR lower(e.summary) LIKE lower(?) ESCAPE '\\')"
+                    .to_string(),
+            );
+            let pattern = like_pattern(term);
+            params.push(Value::Text(pattern.clone()));
+            params.push(Value::Text(pattern));
+        }
+        push_event_filter_conditions(&mut conditions, &mut params, filters, "e");
+        params.push(Value::Integer(limit as i64));
+
         let sql = format!(
             r#"
             SELECT e.session_id, t.title, e.timestamp, e.event_type, e.summary
             FROM events e
             LEFT JOIN threads t ON t.session_id = e.session_id
-            WHERE {filters}
+            WHERE {}
             ORDER BY e.timestamp DESC
-            LIMIT ?{limit_placeholder}
+            LIMIT ?
             "#,
-            filters = filters,
-            limit_placeholder = query_terms.len() + 1
+            conditions.join("\n                AND ")
         );
         let mut stmt = self.conn.prepare(&sql)?;
-        let mut params = query_terms
-            .iter()
-            .map(|term| like_pattern(term))
-            .collect::<Vec<_>>();
-        params.push(limit.to_string());
 
-        let rows = stmt.query_map(rusqlite::params_from_iter(params.iter()), |row| {
+        let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
             let event_type: String = row.get(3)?;
             let summary: String = row.get(4)?;
             let snippet_source = format!("{} {}", event_type, summary);
@@ -1193,6 +1323,122 @@ fn replace_session(
     )?;
 
     Ok(())
+}
+
+fn push_thread_filter_conditions(
+    conditions: &mut Vec<String>,
+    params: &mut Vec<Value>,
+    filters: &ThreadSearchFilters,
+    alias: &str,
+) {
+    push_common_search_filter_conditions(
+        conditions,
+        params,
+        filters.session.as_deref(),
+        filters.since.as_deref(),
+        filters.until.as_deref(),
+        &qualified_column(alias, "session_id"),
+        &qualified_column(alias, "started_at"),
+    );
+
+    if let Some(cwd) = filters.cwd.as_deref() {
+        conditions.push(format!(
+            "lower(ifnull({}, '')) LIKE lower(?) ESCAPE '\\'",
+            qualified_column(alias, "cwd")
+        ));
+        params.push(Value::Text(like_pattern(cwd)));
+    }
+
+    if let Some(path) = filters.path.as_deref() {
+        conditions.push(format!(
+            "lower({}) LIKE lower(?) ESCAPE '\\'",
+            qualified_column(alias, "path")
+        ));
+        params.push(Value::Text(like_pattern(path)));
+    }
+}
+
+fn push_message_filter_conditions(
+    conditions: &mut Vec<String>,
+    params: &mut Vec<Value>,
+    filters: &MessageSearchFilters,
+    alias: &str,
+) {
+    push_common_search_filter_conditions(
+        conditions,
+        params,
+        filters.session.as_deref(),
+        filters.since.as_deref(),
+        filters.until.as_deref(),
+        &qualified_column(alias, "session_id"),
+        &qualified_column(alias, "timestamp"),
+    );
+
+    if let Some(role) = filters.role.as_deref() {
+        conditions.push(format!(
+            "lower({}) = lower(?)",
+            qualified_column(alias, "role")
+        ));
+        params.push(Value::Text(role.to_string()));
+    }
+}
+
+fn push_event_filter_conditions(
+    conditions: &mut Vec<String>,
+    params: &mut Vec<Value>,
+    filters: &EventSearchFilters,
+    alias: &str,
+) {
+    push_common_search_filter_conditions(
+        conditions,
+        params,
+        filters.session.as_deref(),
+        filters.since.as_deref(),
+        filters.until.as_deref(),
+        &qualified_column(alias, "session_id"),
+        &qualified_column(alias, "timestamp"),
+    );
+
+    if let Some(event_type) = filters.event_type.as_deref() {
+        conditions.push(format!(
+            "lower({}) = lower(?)",
+            qualified_column(alias, "event_type")
+        ));
+        params.push(Value::Text(event_type.to_string()));
+    }
+}
+
+fn push_common_search_filter_conditions(
+    conditions: &mut Vec<String>,
+    params: &mut Vec<Value>,
+    session: Option<&str>,
+    since: Option<&str>,
+    until: Option<&str>,
+    session_column: &str,
+    timestamp_column: &str,
+) {
+    if let Some(session) = session {
+        conditions.push(format!("{session_column} = ?"));
+        params.push(Value::Text(session.to_string()));
+    }
+
+    if let Some(since) = since {
+        conditions.push(format!("{timestamp_column} >= ?"));
+        params.push(Value::Text(since.to_string()));
+    }
+
+    if let Some(until) = until {
+        conditions.push(format!("{timestamp_column} <= ?"));
+        params.push(Value::Text(until.to_string()));
+    }
+}
+
+fn qualified_column(alias: &str, column: &str) -> String {
+    if alias.is_empty() {
+        column.to_string()
+    } else {
+        format!("{alias}.{column}")
+    }
 }
 
 fn retain_previous_session_id(

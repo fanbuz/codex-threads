@@ -280,6 +280,122 @@ fn human_readable_events_search_uses_plain_layout() {
 }
 
 #[test]
+fn messages_search_supports_role_and_session_filters() {
+    let (_tmp, sessions_dir, index_dir) = seed_index();
+
+    let output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "messages",
+            "search",
+            "CLI",
+            "--limit",
+            "5",
+            "--role",
+            "user",
+            "--session",
+            "session-alpha",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["count"], 1);
+    assert_eq!(json["results"][0]["session_id"], "session-alpha");
+    assert_eq!(json["results"][0]["role"], "user");
+    assert_eq!(json["filters"]["role"], "user");
+    assert_eq!(json["filters"]["session"], "session-alpha");
+}
+
+#[test]
+fn threads_search_supports_cwd_path_and_time_filters() {
+    let (_tmp, sessions_dir, index_dir) = seed_index();
+
+    let output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "threads",
+            "search",
+            "The",
+            "--limit",
+            "5",
+            "--cwd",
+            "alpha-repo",
+            "--path",
+            "session-alpha",
+            "--since",
+            "2026-04-12T09:00:00Z",
+            "--until",
+            "2026-04-12T10:30:00Z",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["count"], 1);
+    assert_eq!(json["results"][0]["session_id"], "session-alpha");
+    assert_eq!(json["filters"]["cwd"], "alpha-repo");
+    assert_eq!(json["filters"]["path"], "session-alpha");
+    assert_eq!(json["filters"]["since"], "2026-04-12T09:00:00Z");
+    assert_eq!(json["filters"]["until"], "2026-04-12T10:30:00Z");
+}
+
+#[test]
+fn events_search_supports_event_type_session_and_time_filters() {
+    let (_tmp, sessions_dir, index_dir) = seed_index();
+
+    let output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "events",
+            "search",
+            "agent",
+            "--limit",
+            "5",
+            "--event-type",
+            "agent_reasoning",
+            "--session",
+            "session-beta",
+            "--since",
+            "2026-04-12T10:30:00Z",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["count"], 1);
+    assert_eq!(json["results"][0]["session_id"], "session-beta");
+    assert_eq!(json["results"][0]["event_type"], "agent_reasoning");
+    assert_eq!(json["filters"]["event_type"], "agent_reasoning");
+    assert_eq!(json["filters"]["session"], "session-beta");
+    assert_eq!(json["filters"]["since"], "2026-04-12T10:30:00Z");
+}
+
+#[test]
 fn search_normalizes_punctuation_in_message_and_thread_queries() {
     let (_tmp, sessions_dir, index_dir) = seed_index();
 
