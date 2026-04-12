@@ -1,11 +1,11 @@
 # codex-threads
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
-[![Version: 0.0.2](https://img.shields.io/badge/version-0.0.2-blue.svg)](./Cargo.toml)
+[![Version: 0.0.3](https://img.shields.io/badge/version-0.0.3-blue.svg)](./Cargo.toml)
 
 `codex-threads` 是一个轻量 Rust CLI，用来把 `~/.codex/sessions` 下的历史 Codex 会话整理成可搜索、可读取的本地索引。
 
-当前版本：`0.0.2`
+当前版本：`0.0.3`
 
 它面向两类使用方式：
 

@@ -4,13 +4,13 @@ use serde_json::Value;
 use tempfile::tempdir;
 
 #[test]
-fn version_flag_reports_0_0_2() {
+fn version_flag_reports_0_0_3() {
     Command::cargo_bin("codex-threads")
         .unwrap()
         .arg("--version")
         .assert()
         .success()
-        .stdout(predicate::str::contains("codex-threads 0.0.2"));
+        .stdout(predicate::str::contains("codex-threads 0.0.3"));
 }
 
 #[test]
@@ -28,14 +28,14 @@ fn status_reports_cli_version_in_text_and_json_without_timing() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("\"cli_version\":\"0.0.2\""))
+        .stdout(predicate::str::contains("\"cli_version\":\"0.0.3\""))
         .get_output()
         .stdout
         .clone();
 
     let json: Value = serde_json::from_slice(&output).unwrap();
     assert!(json.get("duration_ms").is_none());
-    assert_eq!(json["cli_version"], "0.0.2");
+    assert_eq!(json["cli_version"], "0.0.3");
 
     Command::cargo_bin("codex-threads")
         .unwrap()
@@ -43,7 +43,7 @@ fn status_reports_cli_version_in_text_and_json_without_timing() {
         .assert()
         .success()
         .stdout(predicate::str::contains("索引状态"))
-        .stdout(predicate::str::contains("CLI 版本: 0.0.2"))
+        .stdout(predicate::str::contains("CLI 版本: 0.0.3"))
         .stdout(predicate::str::contains("索引文件:"))
         .stdout(predicate::str::contains("FTS5 可用:"))
         .stdout(predicate::str::contains("耗时:").not());

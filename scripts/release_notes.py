@@ -17,7 +17,7 @@ ISSUE_REF_RE = re.compile(r"#(\d+)")
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="为 GitHub Release 生成带 issue 摘要的说明")
     parser.add_argument("--repo", required=True, help="owner/repo")
-    parser.add_argument("--tag", required=True, help="当前 release tag，例如 v0.0.2")
+    parser.add_argument("--tag", required=True, help="当前 release tag，例如 vX.Y.Z")
     parser.add_argument("--output", required=True, help="输出 markdown 文件路径")
     parser.add_argument("--previous-tag", help="上一个 release tag，用于生成基线说明和提取 commit issue")
     return parser.parse_args()
