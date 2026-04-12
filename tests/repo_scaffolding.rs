@@ -45,8 +45,10 @@ fn workflows_and_readme_are_aligned_with_codex_threads() {
     assert!(release.contains("scripts/release_notes.py"));
     assert!(release.contains("x86_64-apple-darwin"));
     assert!(release.contains("codex-threads-macos-x64.tar.gz"));
-    assert!(!release.contains("x86_64-pc-windows-msvc"));
-    assert!(!release.contains("codex-threads-windows-x64.zip"));
+    assert!(release.contains("x86_64-pc-windows-msvc"));
+    assert!(release.contains("codex-threads-windows-x64.zip"));
+    assert!(release.contains("Install Rust toolchain (Windows)"));
+    assert!(release.contains("Package binary (Windows)"));
     assert!(release.contains("notify-homebrew-tap"));
     assert!(release.contains("repository_dispatch"));
     assert!(release.contains("HOMEBREW_TAP_TOKEN"));

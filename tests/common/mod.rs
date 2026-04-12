@@ -53,6 +53,7 @@ fn alpha_session() -> String {
         r#"{"timestamp":"2026-04-12T10:00:00Z","type":"session_meta","payload":{"id":"session-alpha","timestamp":"2026-04-12T10:00:00Z","cwd":"/workspace/alpha-repo","originator":"codex_cli_rs","cli_version":"0.53.0"}}"#,
         r#"{"timestamp":"2026-04-12T10:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Please build a CLI for thread search"}]}}"#,
         r#"{"timestamp":"2026-04-12T10:00:02Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I will build a CLI using Rust and SQLite."}]}}"#,
+        r#"{"timestamp":"2026-04-12T10:00:02Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"The C++ parser still needs better symbol-aware search."}]}}"#,
         r#"{"timestamp":"2026-04-12T10:00:03Z","type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{\"command\":[\"rg\",\"CLI\"]}"}}"#,
         r#"{"timestamp":"2026-04-12T10:00:04Z","type":"event_msg","payload":{"type":"user_message","message":"Please build a CLI for thread search","images":[]}}"#,
         r#"{"timestamp":"2026-04-12T10:00:05Z","type":"event_msg","payload":{"type":"agent_reasoning","text":"Planning CLI surface and indexing layout"}}"#,
@@ -66,6 +67,7 @@ fn beta_session() -> String {
         r#"{"timestamp":"2026-04-12T11:00:00Z","type":"session_meta","payload":{"id":"session-beta","timestamp":"2026-04-12T11:00:00Z","cwd":"/workspace/beta-repo","originator":"codex_cli_rs","cli_version":"0.53.0"}}"#,
         r#"{"timestamp":"2026-04-12T11:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Investigate websocket reconnect masking"}]}}"#,
         r#"{"timestamp":"2026-04-12T11:00:02Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"The reconnect overlay should only appear after policy rejection."}]}}"#,
+        r#"{"timestamp":"2026-04-12T11:00:02Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"The plain C fallback is still too broad."}]}}"#,
         r#"{"timestamp":"2026-04-12T11:00:03Z","type":"event_msg","payload":{"type":"agent_reasoning","text":"Checking websocket status handling"}}"#,
     ]
     .join("\n")

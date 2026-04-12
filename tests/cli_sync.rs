@@ -34,7 +34,7 @@ fn sync_reports_indexed_files() {
     assert_eq!(json["stats"]["scanned_files"], 2);
     assert_eq!(json["stats"]["indexed_files"], 2);
     assert_eq!(json["stats"]["threads"], 2);
-    assert_eq!(json["stats"]["messages"], 4);
+    assert_eq!(json["stats"]["messages"], 6);
 }
 
 #[test]
@@ -124,7 +124,7 @@ fn sync_is_incremental_for_unchanged_and_changed_files() {
     let third_json: Value = serde_json::from_slice(&third).unwrap();
     assert_eq!(third_json["stats"]["indexed_files"], 1);
     assert_eq!(third_json["stats"]["skipped_files"], 1);
-    assert_eq!(third_json["stats"]["messages"], 5);
+    assert_eq!(third_json["stats"]["messages"], 7);
 }
 
 #[test]
@@ -275,7 +275,7 @@ fn sync_keeps_previous_index_when_existing_file_temporarily_breaks() {
     assert_eq!(json["stats"]["skipped_files"], 1);
     assert_eq!(json["stats"]["failed_files"], 1);
     assert_eq!(json["stats"]["threads"], 2);
-    assert_eq!(json["stats"]["messages"], 4);
+    assert_eq!(json["stats"]["messages"], 6);
     assert_eq!(
         json["failures"][0]["path"],
         alpha_path.to_string_lossy().to_string()

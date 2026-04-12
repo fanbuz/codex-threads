@@ -84,7 +84,7 @@ pub fn messages(store: &Store, identifier: &str, limit: Option<usize>) -> Result
         ));
     }
 
-    Rendered::new(lines.join("\n"), &response)
+    Rendered::new(lines.join("\n"), &response).map(|rendered| rendered.with_duration_after_line(1))
 }
 
 pub fn events(store: &Store, identifier: &str, limit: Option<usize>) -> Result<Rendered> {
@@ -114,5 +114,5 @@ pub fn events(store: &Store, identifier: &str, limit: Option<usize>) -> Result<R
         ));
     }
 
-    Rendered::new(lines.join("\n"), &response)
+    Rendered::new(lines.join("\n"), &response).map(|rendered| rendered.with_duration_after_line(1))
 }

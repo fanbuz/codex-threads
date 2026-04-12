@@ -40,6 +40,11 @@ jobs:
             package_os: macos
             package_arch: x64
             archive_name: codex-threads-macos-x64.tar.gz
+          - runner: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+            package_os: windows
+            package_arch: x64
+            archive_name: codex-threads-windows-x64.zip
 
     steps:
       - name: Checkout
@@ -59,8 +64,27 @@ jobs:
             rustup default stable
           fi
 
+      - name: Install Rust toolchain (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
+            Invoke-WebRequest -Uri https://win.rustup.rs/x86_64 -OutFile rustup-init.exe
+            .\rustup-init.exe -y --profile minimal --default-toolchain stable
+            "$env:USERPROFILE\.cargo\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          } else {
+            rustup toolchain install stable --profile minimal
+            rustup default stable
+          }
+
       - name: Add Rust target (Unix)
+        if: runner.os != 'Windows'
         shell: bash
+        run: rustup target add "${{ matrix.rust_target }}"
+
+      - name: Add Rust target (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
         run: rustup target add "${{ matrix.rust_target }}"
 
       - name: Run tests
@@ -70,6 +94,7 @@ jobs:
         run: cargo build --locked --release --target ${{ matrix.rust_target }}
 
       - name: Package binary (Unix)
+        if: runner.os != 'Windows'
         id: package_unix
         shell: bash
         run: |
@@ -79,11 +104,30 @@ jobs:
           tar -C dist -czf "dist/${archive_name}" "${BIN_NAME}"
           echo "archive_path=dist/${archive_name}" >> "$GITHUB_OUTPUT"
 
+      - name: Package binary (Windows)
+        if: runner.os == 'Windows'
+        id: package_windows
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item "target/${{ matrix.rust_target }}/release/$env:BIN_NAME.exe" "dist/$env:BIN_NAME.exe"
+          Compress-Archive -Path "dist/$env:BIN_NAME.exe" -DestinationPath "dist/${{ matrix.archive_name }}" -Force
+          "archive_path=dist/${{ matrix.archive_name }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
       - name: Upload packaged release asset (Unix)
+        if: runner.os != 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: codex-threads-${{ matrix.package_os }}-${{ matrix.package_arch }}
           path: ${{ steps.package_unix.outputs.archive_path }}
+          if-no-files-found: error
+
+      - name: Upload packaged release asset (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-threads-${{ matrix.package_os }}-${{ matrix.package_arch }}
+          path: ${{ steps.package_windows.outputs.archive_path }}
           if-no-files-found: error
 
   publish:
