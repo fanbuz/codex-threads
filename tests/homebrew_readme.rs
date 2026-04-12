@@ -10,5 +10,12 @@ fn readme_documents_homebrew_installation() {
     assert!(readme.contains("brew upgrade codex-threads"));
     assert!(readme.contains("支持平台直接安装预编译二进制"));
     assert!(readme.contains("否则回退源码构建"));
+    assert!(readme.contains("## 各平台使用说明"));
+    assert!(readme.contains("### macOS"));
+    assert!(readme.contains("### Linux"));
+    assert!(readme.contains("### Windows"));
+    assert!(readme.contains("codex-threads-windows-x64.zip"));
+    assert!(readme.contains("C:\\Users\\<you>\\.codex\\sessions"));
     assert!(readme.contains("macOS x64"));
+    assert!(readme.contains("Windows x64"));
 }

@@ -61,8 +61,96 @@ brew upgrade codex-threads
 - macOS arm64
 - macOS x64
 - Linux x64
+- Windows x64
 
 支持平台直接安装预编译二进制，否则回退源码构建；如果当前平台暂时没有对应的预编译包，则需要本地可用的 Rust 工具链。
+
+## 各平台使用说明
+
+### macOS
+
+最省事的方式是直接用 Homebrew：
+
+```bash
+brew tap fanbuz/tap
+brew install fanbuz/tap/codex-threads
+```
+
+升级：
+
+```bash
+brew upgrade codex-threads
+```
+
+如果你不走 Homebrew，也可以从 GitHub Releases 下载对应平台的预编译包：
+
+- Apple Silicon: `codex-threads-macos-arm64.tar.gz`
+- Intel: `codex-threads-macos-x64.tar.gz`
+
+默认目录：
+
+- 会话目录：`~/.codex/sessions`
+- 索引目录：`~/.codex/threads-index`
+
+常用命令：
+
+```bash
+codex-threads --json sync
+codex-threads messages search "build a CLI" --limit 20
+codex-threads threads read <session-id> --limit 20
+```
+
+### Linux
+
+Linux x64 可以直接从 GitHub Releases 下载：
+
+- `codex-threads-linux-x64.tar.gz`
+
+解压后把二进制放到你的 `PATH` 里即可；如果你更习惯本地构建，也可以在仓库根目录运行：
+
+```bash
+cargo install --path . --force
+```
+
+默认目录：
+
+- 会话目录：`~/.codex/sessions`
+- 索引目录：`~/.codex/threads-index`
+
+常用命令：
+
+```bash
+codex-threads --json sync
+codex-threads --json messages search "build a CLI" --limit 20
+codex-threads events read <session-id> --limit 50
+```
+
+### Windows
+
+Windows x64 可以直接从 GitHub Releases 下载：
+
+- `codex-threads-windows-x64.zip`
+
+解压后在 PowerShell 里运行：
+
+```powershell
+.\codex-threads.exe --json sync
+.\codex-threads.exe messages search "build a CLI" --limit 20
+.\codex-threads.exe threads read <session-id> --limit 20
+```
+
+如果你想自己构建，可以先安装 Rust 的 MSVC toolchain，然后在仓库根目录运行：
+
+```powershell
+cargo install --path . --force
+```
+
+默认目录：
+
+- 会话目录：`C:\Users\<you>\.codex\sessions`
+- 索引目录：`C:\Users\<you>\.codex\threads-index`
+
+如果你的 Codex 会话不在默认位置，也可以继续用 `--sessions-dir` 和 `--index-dir` 显式覆盖。
 
 ### Release Automation
 

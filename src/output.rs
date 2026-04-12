@@ -3,6 +3,8 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 use std::time::Duration;
 
+use crate::query::normalize_query_terms;
+
 #[derive(Debug, Clone)]
 pub struct Rendered {
     pub text: String,
@@ -65,11 +67,13 @@ pub fn excerpt(text: &str, query: &str, width: usize) -> String {
     }
 
     let lower_text = normalized.to_lowercase();
-    let query_terms = query
-        .split(|ch: char| !ch.is_alphanumeric())
-        .filter(|part| !part.is_empty())
-        .map(str::to_lowercase)
+    let mut query_terms = normalize_query_terms(query)
+        .into_iter()
+        .map(|term| term.to_lowercase())
         .collect::<Vec<_>>();
+    if query_terms.is_empty() && !query.trim().is_empty() {
+        query_terms.push(query.trim().to_lowercase());
+    }
 
     let start = query_terms
         .iter()

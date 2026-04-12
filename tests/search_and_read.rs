@@ -272,6 +272,63 @@ fn search_normalizes_punctuation_in_message_and_thread_queries() {
 }
 
 #[test]
+fn search_preserves_symbol_bearing_queries() {
+    let (_tmp, sessions_dir, index_dir) = seed_index();
+
+    let messages_output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "messages",
+            "search",
+            "C++",
+            "--limit",
+            "5",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let messages_json: Value = serde_json::from_slice(&messages_output).unwrap();
+    assert_eq!(messages_json["count"], 1);
+    assert_eq!(messages_json["results"][0]["session_id"], "session-alpha");
+    assert!(messages_json["results"][0]["snippet"]
+        .as_str()
+        .unwrap()
+        .contains("C++"));
+
+    let threads_output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "threads",
+            "search",
+            "C++",
+            "--limit",
+            "5",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let threads_json: Value = serde_json::from_slice(&threads_output).unwrap();
+    assert_eq!(threads_json["count"], 1);
+    assert_eq!(threads_json["results"][0]["session_id"], "session-alpha");
+}
+
+#[test]
 fn thread_message_and_event_reads_honor_limits() {
     let (_tmp, sessions_dir, index_dir) = seed_index();
 

@@ -11,8 +11,9 @@ fn parser_extracts_thread_messages_and_events() {
 
     assert_eq!(parsed.session_id, "session-alpha");
     assert_eq!(parsed.cwd.as_deref(), Some("/workspace/alpha-repo"));
-    assert_eq!(parsed.messages.len(), 2);
+    assert_eq!(parsed.messages.len(), 3);
     assert_eq!(parsed.events.len(), 4);
     assert!(parsed.title.contains("alpha-repo"));
     assert!(parsed.aggregate_text.contains("Rust and SQLite"));
+    assert!(parsed.aggregate_text.contains("C++"));
 }
