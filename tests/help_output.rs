@@ -8,7 +8,7 @@ fn top_level_help_shows_command_descriptions() {
         .arg("--help")
         .assert()
         .success()
-        .stdout(predicate::str::contains("CLI 版本: 0.0.1"))
+        .stdout(predicate::str::contains("CLI 版本: 0.0.2"))
         .stdout(predicate::str::contains(
             "sync      增量扫描会话文件并更新索引",
         ))

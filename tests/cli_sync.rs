@@ -29,6 +29,8 @@ fn sync_reports_indexed_files() {
 
     let json: Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(json["command"], "sync");
+    assert!(json.get("duration_ms").and_then(Value::as_u64).is_some());
+    assert!(json.get("duration_display").is_none());
     assert_eq!(json["stats"]["scanned_files"], 2);
     assert_eq!(json["stats"]["indexed_files"], 2);
     assert_eq!(json["stats"]["threads"], 2);
@@ -57,7 +59,8 @@ fn sync_text_output_uses_plain_lines() {
         .stdout(predicates::str::contains("会话目录:"))
         .stdout(predicates::str::contains("索引目录:"))
         .stdout(predicates::str::contains("扫描文件:"))
-        .stdout(predicates::str::contains("线程总数:"));
+        .stdout(predicates::str::contains("线程总数:"))
+        .stdout(predicates::str::contains("耗时:"));
 }
 
 #[test]

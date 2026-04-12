@@ -1,11 +1,11 @@
 # codex-threads
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
-[![Version: 0.0.1](https://img.shields.io/badge/version-0.0.1-blue.svg)](./Cargo.toml)
+[![Version: 0.0.2](https://img.shields.io/badge/version-0.0.2-blue.svg)](./Cargo.toml)
 
 `codex-threads` 是一个轻量 Rust CLI，用来把 `~/.codex/sessions` 下的历史 Codex 会话整理成可搜索、可读取的本地索引。
 
-当前版本：`0.0.1`
+当前版本：`0.0.2`
 
 它面向两类使用方式：
 
@@ -23,6 +23,7 @@
 - 增量扫描 `~/.codex/sessions`
 - 线程、消息、事件三类读取接口
 - 默认人类可读输出和 `--json` 结构化输出
+- 除 `status` / `help` / `--version` 外，命令会附带耗时统计
 - SQLite 全文索引优先，必要时回退到普通搜索
 - 适合被其他 Codex 线程直接调用
 
@@ -99,6 +100,12 @@ codex-threads status
 - `--json` 输出纯 JSON
 - `--sessions-dir PATH` 覆盖默认会话目录
 - `--index-dir PATH` 覆盖默认索引目录
+
+输出约定：
+
+- 人类可读模式会在 `sync`、`search`、`read` 等操作末尾追加 `耗时: ...`
+- 耗时会按时长动态显示为 `ms` 或 `s`
+- `--json` 模式不输出格式化耗时文本，只提供稳定字段 `duration_ms`
 
 ## 设计要点
 

@@ -3,6 +3,7 @@ mod search;
 mod sync;
 
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use anyhow::{bail, Result};
 
@@ -16,20 +17,36 @@ pub fn run(cli: Cli) -> Result<Rendered> {
     let mut store = Store::open(&index_dir)?;
 
     match cli.command {
-        Command::Sync => sync::run(&mut store, &sessions_dir, &index_dir),
+        Command::Sync => run_with_timing(|| sync::run(&mut store, &sessions_dir, &index_dir)),
         Command::Status => sync::status(&store),
         Command::Threads { command } => match command {
-            ThreadsCommand::Search(args) => search::threads(&store, &args.query, args.limit),
-            ThreadsCommand::Read(args) => read::thread(&store, &args.session_id, args.limit),
+            ThreadsCommand::Search(args) => {
+                run_with_timing(|| search::threads(&store, &args.query, args.limit))
+            }
+            ThreadsCommand::Read(args) => {
+                run_with_timing(|| read::thread(&store, &args.session_id, args.limit))
+            }
         },
         Command::Messages { command } => match command {
-            MessagesCommand::Search(args) => search::messages(&store, &args.query, args.limit),
-            MessagesCommand::Read(args) => read::messages(&store, &args.session_id, args.limit),
+            MessagesCommand::Search(args) => {
+                run_with_timing(|| search::messages(&store, &args.query, args.limit))
+            }
+            MessagesCommand::Read(args) => {
+                run_with_timing(|| read::messages(&store, &args.session_id, args.limit))
+            }
         },
         Command::Events { command } => match command {
-            EventsCommand::Read(args) => read::events(&store, &args.session_id, args.limit),
+            EventsCommand::Read(args) => {
+                run_with_timing(|| read::events(&store, &args.session_id, args.limit))
+            }
         },
     }
+}
+
+fn run_with_timing(operation: impl FnOnce() -> Result<Rendered>) -> Result<Rendered> {
+    let started_at = Instant::now();
+    let rendered = operation()?;
+    Ok(rendered.with_duration(started_at.elapsed()))
 }
 
 fn resolve_sessions_dir(value: Option<&Path>) -> Result<PathBuf> {
