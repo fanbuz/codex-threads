@@ -1,0 +1,164 @@
+name: Release Binaries
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build and publish
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  BIN_NAME: codex-threads
+
+jobs:
+  build:
+    name: release-build-${{ matrix.package_os }}-${{ matrix.package_arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            rust_target: x86_64-unknown-linux-gnu
+            package_os: linux
+            package_arch: x64
+            archive_name: codex-threads-linux-x64.tar.gz
+          - runner: macos-latest
+            rust_target: aarch64-apple-darwin
+            package_os: macos
+            package_arch: arm64
+            archive_name: codex-threads-macos-arm64.tar.gz
+          - runner: macos-latest
+            rust_target: x86_64-apple-darwin
+            package_os: macos
+            package_arch: x64
+            archive_name: codex-threads-macos-x64.tar.gz
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Install Rust toolchain (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal --default-toolchain stable
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          else
+            rustup toolchain install stable --profile minimal
+            rustup default stable
+          fi
+
+      - name: Add Rust target (Unix)
+        shell: bash
+        run: rustup target add "${{ matrix.rust_target }}"
+
+      - name: Run tests
+        run: cargo test --locked
+
+      - name: Build release binary
+        run: cargo build --locked --release --target ${{ matrix.rust_target }}
+
+      - name: Package binary (Unix)
+        id: package_unix
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.rust_target }}/release/${BIN_NAME}" "dist/${BIN_NAME}"
+          archive_name="${{ matrix.archive_name }}"
+          tar -C dist -czf "dist/${archive_name}" "${BIN_NAME}"
+          echo "archive_path=dist/${archive_name}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload packaged release asset (Unix)
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-threads-${{ matrix.package_os }}-${{ matrix.package_arch }}
+          path: ${{ steps.package_unix.outputs.archive_path }}
+          if-no-files-found: error
+
+  publish:
+    name: publish-release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout release ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Download packaged assets
+        uses: actions/download-artifact@v5
+        with:
+          path: release-assets
+
+      - name: Create or update GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG_NAME: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          mapfile -t files < <(find release-assets -type f | sort)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No release assets found." >&2
+            exit 1
+          fi
+
+          if gh release view "$TAG_NAME" --repo "$GH_REPO" >/dev/null 2>&1; then
+            gh release upload "$TAG_NAME" "${files[@]}" --clobber --repo "$GH_REPO"
+          else
+            gh release create "$TAG_NAME" "${files[@]}" --title "$TAG_NAME" --generate-notes --verify-tag --repo "$GH_REPO"
+          fi
+
+  notify-homebrew-tap:
+    name: notify-homebrew-tap
+    needs: publish
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check tap dispatch token
+        id: token
+        shell: bash
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "${HOMEBREW_TAP_TOKEN}" ]; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "HOMEBREW_TAP_TOKEN is not set; skipping tap notification."
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Dispatch homebrew formula sync via repository_dispatch
+        if: ${{ steps.token.outputs.available == 'true' }}
+        shell: bash
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG_NAME: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          curl -fsSL -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${HOMEBREW_TAP_TOKEN}" \
+            https://api.github.com/repos/fanbuz/homebrew-tap/dispatches \
+            --data @- <<EOF
+          {
+            "event_type": "sync-homebrew-formula",
+            "client_payload": {
+              "source_repository": "${GITHUB_REPOSITORY}",
+              "tag": "${TAG_NAME}",
+              "formula_name": "codex-threads"
+            }
+          }
+          EOF
