@@ -101,6 +101,16 @@ pub struct EventRecord {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct EventSearchHit {
+    pub session_id: String,
+    pub title: Option<String>,
+    pub timestamp: Option<String>,
+    pub event_type: String,
+    pub summary: String,
+    pub snippet: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ThreadRead {
     pub thread: ThreadRecord,
     pub messages: Vec<MessageRecord>,
@@ -349,6 +359,44 @@ impl Store {
         }
 
         self.search_messages_like(&query_terms, &normalized_query, limit)
+    }
+
+    pub fn search_events(&self, query: &str, limit: usize) -> Result<Vec<EventSearchHit>> {
+        let original_query = query.trim();
+        if original_query.is_empty() {
+            return Ok(Vec::new());
+        }
+        let query_terms = normalize_query_terms(original_query);
+        let normalized_query = if query_terms.is_empty() {
+            original_query.to_string()
+        } else {
+            query_terms.join(" ")
+        };
+
+        if self.fts_available {
+            if let Ok(results) = self.search_events_fts(original_query, limit) {
+                if !results.is_empty() {
+                    return Ok(results);
+                }
+            }
+        }
+
+        let literal_results = self.search_events_like_literal(original_query, limit)?;
+        if !literal_results.is_empty() {
+            return Ok(literal_results);
+        }
+
+        if self.fts_available && should_expand_query_terms(original_query, &query_terms) {
+            if let Some(fts_query) = expanded_fts_query(original_query, &normalized_query) {
+                if let Ok(results) = self.search_events_fts(&fts_query, limit) {
+                    if !results.is_empty() {
+                        return Ok(results);
+                    }
+                }
+            }
+        }
+
+        self.search_events_like(&query_terms, &normalized_query, limit)
     }
 
     pub fn read_thread(&self, identifier: &str, limit: Option<usize>) -> Result<ThreadRead> {
@@ -600,6 +648,44 @@ impl Store {
             .map_err(Into::into)
     }
 
+    fn search_events_fts(&self, query: &str, limit: usize) -> Result<Vec<EventSearchHit>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT
+                e.session_id,
+                t.title,
+                e.timestamp,
+                e.event_type,
+                e.summary,
+                snippet(events_fts, 2, '[', ']', '…', 12)
+            FROM events_fts
+            JOIN events e ON e.id = events_fts.rowid
+            LEFT JOIN threads t ON t.session_id = e.session_id
+            WHERE events_fts MATCH ?1
+            ORDER BY bm25(events_fts), e.timestamp DESC
+            LIMIT ?2
+            "#,
+        )?;
+
+        let rows = stmt.query_map(params![query, limit as i64], |row| {
+            let event_type: String = row.get(3)?;
+            let summary: String = row.get(4)?;
+            let snippet: Option<String> = row.get(5)?;
+            let snippet_source = format!("{} {}", event_type, summary);
+            Ok(EventSearchHit {
+                session_id: row.get(0)?,
+                title: row.get(1)?,
+                timestamp: row.get(2)?,
+                event_type,
+                summary: summary.clone(),
+                snippet: snippet.unwrap_or_else(|| excerpt(&snippet_source, query, 120)),
+            })
+        })?;
+
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
     fn search_messages_like(
         &self,
         query_terms: &[String],
@@ -608,6 +694,19 @@ impl Store {
     ) -> Result<Vec<MessageSearchHit>> {
         if should_expand_query_terms(normalized_query, query_terms) {
             return self.search_messages_like_terms(query_terms, normalized_query, limit);
+        }
+
+        Ok(Vec::new())
+    }
+
+    fn search_events_like(
+        &self,
+        query_terms: &[String],
+        normalized_query: &str,
+        limit: usize,
+    ) -> Result<Vec<EventSearchHit>> {
+        if should_expand_query_terms(normalized_query, query_terms) {
+            return self.search_events_like_terms(query_terms, normalized_query, limit);
         }
 
         Ok(Vec::new())
@@ -686,6 +785,97 @@ impl Store {
                 role: row.get(3)?,
                 text: text.clone(),
                 snippet: excerpt(&text, normalized_query, 120),
+            })
+        })?;
+
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    fn search_events_like_literal(
+        &self,
+        original_query: &str,
+        limit: usize,
+    ) -> Result<Vec<EventSearchHit>> {
+        let pattern = like_pattern(original_query);
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT e.session_id, t.title, e.timestamp, e.event_type, e.summary
+            FROM events e
+            LEFT JOIN threads t ON t.session_id = e.session_id
+            WHERE lower(e.event_type) LIKE lower(?1) ESCAPE '\'
+                OR lower(e.summary) LIKE lower(?1) ESCAPE '\'
+            ORDER BY e.timestamp DESC
+            LIMIT ?2
+            "#,
+        )?;
+
+        let rows = stmt.query_map(params![pattern, limit as i64], |row| {
+            let event_type: String = row.get(3)?;
+            let summary: String = row.get(4)?;
+            let snippet_source = format!("{} {}", event_type, summary);
+            Ok(EventSearchHit {
+                session_id: row.get(0)?,
+                title: row.get(1)?,
+                timestamp: row.get(2)?,
+                event_type,
+                summary: summary.clone(),
+                snippet: excerpt(&snippet_source, original_query, 120),
+            })
+        })?;
+
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    fn search_events_like_terms(
+        &self,
+        query_terms: &[String],
+        normalized_query: &str,
+        limit: usize,
+    ) -> Result<Vec<EventSearchHit>> {
+        let filters = query_terms
+            .iter()
+            .enumerate()
+            .map(|(idx, _)| {
+                let placeholder = format!("?{}", idx + 1);
+                format!(
+                    "(lower(e.event_type) LIKE lower({0}) ESCAPE '\\' OR lower(e.summary) LIKE lower({0}) ESCAPE '\\')",
+                    placeholder
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" AND ");
+        let sql = format!(
+            r#"
+            SELECT e.session_id, t.title, e.timestamp, e.event_type, e.summary
+            FROM events e
+            LEFT JOIN threads t ON t.session_id = e.session_id
+            WHERE {filters}
+            ORDER BY e.timestamp DESC
+            LIMIT ?{limit_placeholder}
+            "#,
+            filters = filters,
+            limit_placeholder = query_terms.len() + 1
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut params = query_terms
+            .iter()
+            .map(|term| like_pattern(term))
+            .collect::<Vec<_>>();
+        params.push(limit.to_string());
+
+        let rows = stmt.query_map(rusqlite::params_from_iter(params.iter()), |row| {
+            let event_type: String = row.get(3)?;
+            let summary: String = row.get(4)?;
+            let snippet_source = format!("{} {}", event_type, summary);
+            Ok(EventSearchHit {
+                session_id: row.get(0)?,
+                title: row.get(1)?,
+                timestamp: row.get(2)?,
+                event_type,
+                summary: summary.clone(),
+                snippet: excerpt(&snippet_source, normalized_query, 120),
             })
         })?;
 
@@ -983,6 +1173,18 @@ fn replace_session(
                 event.raw_json,
             ],
         )?;
+        let event_row_id = tx.last_insert_rowid();
+        if fts_available {
+            tx.execute(
+                "INSERT INTO events_fts(rowid, session_id, event_type, summary) VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    event_row_id,
+                    parsed.session_id,
+                    event.event_type,
+                    event.summary
+                ],
+            )?;
+        }
     }
 
     tx.execute(
@@ -1029,6 +1231,15 @@ fn delete_session(tx: &Transaction<'_>, fts_available: bool, session_id: &str) -
         drop(stmt);
         for id in ids {
             tx.execute("DELETE FROM messages_fts WHERE rowid = ?1", params![id])?;
+        }
+
+        let mut stmt = tx.prepare("SELECT id FROM events WHERE session_id = ?1")?;
+        let ids = stmt
+            .query_map(params![session_id], |row| row.get::<_, i64>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(stmt);
+        for id in ids {
+            tx.execute("DELETE FROM events_fts WHERE rowid = ?1", params![id])?;
         }
     }
 

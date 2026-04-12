@@ -21,7 +21,7 @@
 ## Features
 
 - 增量扫描 `~/.codex/sessions`
-- 线程、消息、事件三类读取接口
+- 线程、消息、事件三类搜索与读取接口
 - 默认提供便于直接阅读的命令行输出，以及 `--json` 结构化输出
 - 除 `status` / `help` / `--version` 外，命令会附带耗时统计
 - SQLite 全文索引优先，必要时回退到普通搜索
@@ -167,6 +167,7 @@ cargo install --path . --force
 ```bash
 codex-threads --json sync
 codex-threads --json messages search "build a CLI" --limit 10
+codex-threads --json events search "agent_reasoning" --limit 10
 codex-threads --json threads read <session-id> --limit 20
 ```
 
@@ -176,6 +177,7 @@ codex-threads --json threads read <session-id> --limit 20
 codex-threads sync
 codex-threads --json sync
 codex-threads messages search "build a CLI" --limit 20
+codex-threads events search "agent_reasoning" --limit 20
 codex-threads --json threads search "websocket reconnect"
 codex-threads threads read session-alpha --limit 20
 codex-threads messages read <session-id> --limit 50
@@ -205,7 +207,7 @@ codex-threads status
 ## 适合的工作流
 
 1. 先运行 `codex-threads --json sync`
-2. 用 `messages search` 或 `threads search` 找线索
+2. 用 `messages search`、`threads search` 或 `events search` 找线索
 3. 再用 `threads read`、`messages read` 或 `events read` 深入读取
 
 ## Contributing

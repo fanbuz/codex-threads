@@ -49,7 +49,7 @@ pub enum Command {
         #[command(subcommand)]
         command: MessagesCommand,
     },
-    #[command(about = "读取事件记录")]
+    #[command(about = "搜索和读取事件记录")]
     Events {
         #[command(subcommand)]
         command: EventsCommand,
@@ -74,6 +74,8 @@ pub enum MessagesCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum EventsCommand {
+    #[command(about = "在所有历史事件中搜索关键词")]
+    Search(SearchArgs),
     #[command(about = "读取指定线程里的事件记录")]
     Read(ReadArgs),
 }

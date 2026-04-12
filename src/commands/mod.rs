@@ -36,6 +36,9 @@ pub fn run(cli: Cli) -> Result<Rendered> {
             }
         },
         Command::Events { command } => match command {
+            EventsCommand::Search(args) => {
+                run_with_timing(|| search::events(&store, &args.query, args.limit))
+            }
             EventsCommand::Read(args) => {
                 run_with_timing(|| read::events(&store, &args.session_id, args.limit))
             }
