@@ -55,8 +55,22 @@ fn messages_search_returns_matching_snippets() {
     assert!(json.get("duration_ms").and_then(Value::as_u64).is_some());
     assert!(json.get("duration_display").is_none());
     assert_eq!(json["count"], 1);
+    assert_eq!(json["search"]["backend"], "fts");
+    assert_eq!(json["search"]["query_mode"], "literal");
+    assert_eq!(json["search"]["ranking"], "bm25");
+    assert_eq!(
+        json["search"]["normalized_terms"],
+        serde_json::json!(["Rust", "and", "SQLite"])
+    );
     assert_eq!(json["results"][0]["session_id"], "session-alpha");
     assert_eq!(json["results"][0]["role"], "assistant");
+    assert_eq!(json["results"][0]["explain"]["rank"], 1);
+    assert_eq!(
+        json["results"][0]["explain"]["matched_fields"],
+        serde_json::json!(["text"])
+    );
+    assert_eq!(json["results"][0]["explain"]["matched_terms"], 3);
+    assert_eq!(json["results"][0]["explain"]["literal_match"], true);
 }
 
 #[test]
@@ -243,8 +257,15 @@ fn events_search_returns_matching_results() {
     let json: Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(json["command"], "events.search");
     assert_eq!(json["count"], 2);
+    assert_eq!(json["search"]["backend"], "fts");
+    assert_eq!(json["search"]["query_mode"], "literal");
+    assert_eq!(json["search"]["ranking"], "bm25");
     assert_eq!(json["results"][0]["session_id"], "session-beta");
     assert_eq!(json["results"][0]["event_type"], "agent_reasoning");
+    assert_eq!(
+        json["results"][0]["explain"]["matched_fields"],
+        serde_json::json!(["event_type"])
+    );
 }
 
 #[test]
@@ -534,6 +555,21 @@ fn search_expands_slash_queries_without_breaking_literal_symbols() {
     let threads_json: Value = serde_json::from_slice(&threads_output).unwrap();
     assert_eq!(threads_json["count"], 1);
     assert_eq!(threads_json["results"][0]["session_id"], "session-alpha");
+    assert_eq!(threads_json["search"]["query_mode"], "expanded");
+    assert_eq!(threads_json["search"]["normalized_query"], "CLI search");
+    assert_eq!(
+        threads_json["search"]["normalized_terms"],
+        serde_json::json!(["CLI", "search"])
+    );
+    assert_eq!(
+        threads_json["results"][0]["explain"]["matched_fields"],
+        serde_json::json!(["title", "aggregate_text"])
+    );
+    assert_eq!(threads_json["results"][0]["explain"]["matched_terms"], 2);
+    assert_eq!(
+        threads_json["results"][0]["explain"]["literal_match"],
+        false
+    );
 }
 
 #[test]

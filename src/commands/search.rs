@@ -3,7 +3,7 @@ use serde::Serialize;
 
 use crate::cli::{EventSearchArgs, MessageSearchArgs, ThreadSearchArgs};
 use crate::index::{
-    EventSearchFilters, EventSearchHit, MessageSearchFilters, MessageSearchHit, Store,
+    EventSearchFilters, EventSearchHit, MessageSearchFilters, MessageSearchHit, SearchMeta, Store,
     ThreadSearchFilters, ThreadSearchHit,
 };
 use crate::output::Rendered;
@@ -14,6 +14,7 @@ struct MessageSearchResponse {
     ok: bool,
     query: String,
     count: usize,
+    search: SearchMeta,
     filters: MessageSearchFilters,
     results: Vec<MessageSearchHit>,
 }
@@ -24,6 +25,7 @@ struct ThreadSearchResponse {
     ok: bool,
     query: String,
     count: usize,
+    search: SearchMeta,
     filters: ThreadSearchFilters,
     results: Vec<ThreadSearchHit>,
 }
@@ -34,6 +36,7 @@ struct EventSearchResponse {
     ok: bool,
     query: String,
     count: usize,
+    search: SearchMeta,
     filters: EventSearchFilters,
     results: Vec<EventSearchHit>,
 }
@@ -45,21 +48,22 @@ pub fn messages(store: &Store, args: &MessageSearchArgs) -> Result<Rendered> {
         session: args.common.session.clone(),
         role: args.role.clone(),
     };
-    let results = store.search_messages(&args.common.query, args.common.limit, &filters)?;
+    let report = store.search_messages(&args.common.query, args.common.limit, &filters)?;
     let response = MessageSearchResponse {
         command: "messages.search",
         ok: true,
         query: args.common.query.clone(),
-        count: results.len(),
+        count: report.results.len(),
+        search: report.search.clone(),
         filters: filters.clone(),
-        results: results.clone(),
+        results: report.results.clone(),
     };
 
     let mut lines = vec![
         format!("消息搜索: {}", args.common.query),
         format!("命中条数: {}", response.count),
     ];
-    for item in results {
+    for item in report.results {
         lines.push(format!(
             "- [{}] {} {}",
             item.session_id, item.role, item.snippet
@@ -77,21 +81,22 @@ pub fn threads(store: &Store, args: &ThreadSearchArgs) -> Result<Rendered> {
         cwd: args.cwd.clone(),
         path: args.path.clone(),
     };
-    let results = store.search_threads(&args.common.query, args.common.limit, &filters)?;
+    let report = store.search_threads(&args.common.query, args.common.limit, &filters)?;
     let response = ThreadSearchResponse {
         command: "threads.search",
         ok: true,
         query: args.common.query.clone(),
-        count: results.len(),
+        count: report.results.len(),
+        search: report.search.clone(),
         filters: filters.clone(),
-        results: results.clone(),
+        results: report.results.clone(),
     };
 
     let mut lines = vec![
         format!("线程搜索: {}", args.common.query),
         format!("命中条数: {}", response.count),
     ];
-    for item in results {
+    for item in report.results {
         lines.push(format!(
             "- [{}] {} {}",
             item.session_id, item.title, item.snippet
@@ -108,21 +113,22 @@ pub fn events(store: &Store, args: &EventSearchArgs) -> Result<Rendered> {
         session: args.common.session.clone(),
         event_type: args.event_type.clone(),
     };
-    let results = store.search_events(&args.common.query, args.common.limit, &filters)?;
+    let report = store.search_events(&args.common.query, args.common.limit, &filters)?;
     let response = EventSearchResponse {
         command: "events.search",
         ok: true,
         query: args.common.query.clone(),
-        count: results.len(),
+        count: report.results.len(),
+        search: report.search.clone(),
         filters: filters.clone(),
-        results: results.clone(),
+        results: report.results.clone(),
     };
 
     let mut lines = vec![
         format!("事件搜索: {}", args.common.query),
         format!("命中条数: {}", response.count),
     ];
-    for item in results {
+    for item in report.results {
         lines.push(format!(
             "- [{}] {} {}",
             item.session_id, item.event_type, item.snippet

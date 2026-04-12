@@ -13,6 +13,10 @@ use crate::parser::ParsedSession;
 use crate::query::normalize_query_terms;
 
 use super::schema::init_schema;
+use super::search_meta::{
+    analyze_match, build_search_meta, SearchBackend, SearchExplain, SearchField, SearchQueryMode,
+    SearchReport,
+};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SyncStats {
@@ -72,6 +76,11 @@ pub struct ThreadSearchHit {
     pub message_count: usize,
     pub event_count: usize,
     pub snippet: String,
+    pub explain: SearchExplain,
+    #[serde(skip_serializing)]
+    pub aggregate_text: String,
+    #[serde(skip_serializing)]
+    pub started_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -104,6 +113,7 @@ pub struct MessageSearchHit {
     pub role: String,
     pub text: String,
     pub snippet: String,
+    pub explain: SearchExplain,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -134,6 +144,7 @@ pub struct EventSearchHit {
     pub event_type: String,
     pub summary: String,
     pub snippet: String,
+    pub explain: SearchExplain,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -328,10 +339,19 @@ impl Store {
         query: &str,
         limit: usize,
         filters: &ThreadSearchFilters,
-    ) -> Result<Vec<ThreadSearchHit>> {
+    ) -> Result<SearchReport<ThreadSearchHit>> {
         let original_query = query.trim();
         if original_query.is_empty() {
-            return Ok(Vec::new());
+            return Ok(SearchReport {
+                search: build_search_meta(
+                    original_query,
+                    &[],
+                    SearchBackend::Like,
+                    SearchQueryMode::Literal,
+                    "field_match_then_recency",
+                ),
+                results: Vec::new(),
+            });
         }
         let query_terms = normalize_query_terms(original_query);
         let normalized_query = if query_terms.is_empty() {
@@ -339,31 +359,84 @@ impl Store {
         } else {
             query_terms.join(" ")
         };
+        let fallback_limit = fallback_candidate_limit(limit);
 
         if self.fts_available {
             if let Ok(results) = self.search_threads_fts(original_query, limit, filters) {
                 if !results.is_empty() {
-                    return Ok(results);
+                    return Ok(finalize_thread_search_report(
+                        results,
+                        build_search_meta(
+                            original_query,
+                            &query_terms,
+                            SearchBackend::Fts,
+                            SearchQueryMode::Literal,
+                            "bm25",
+                        ),
+                        original_query,
+                        &query_terms,
+                        limit,
+                    ));
                 }
             }
         }
 
-        let literal_results = self.search_threads_like_literal(original_query, limit, filters)?;
+        let literal_results =
+            self.search_threads_like_literal(original_query, fallback_limit, filters)?;
         if !literal_results.is_empty() {
-            return Ok(literal_results);
+            return Ok(finalize_thread_search_report(
+                literal_results,
+                build_search_meta(
+                    original_query,
+                    &query_terms,
+                    SearchBackend::Like,
+                    SearchQueryMode::Literal,
+                    "field_match_then_recency",
+                ),
+                original_query,
+                &query_terms,
+                limit,
+            ));
         }
 
         if self.fts_available && should_expand_query_terms(original_query, &query_terms) {
             if let Some(fts_query) = expanded_fts_query(original_query, &normalized_query) {
                 if let Ok(results) = self.search_threads_fts(&fts_query, limit, filters) {
                     if !results.is_empty() {
-                        return Ok(results);
+                        return Ok(finalize_thread_search_report(
+                            results,
+                            build_search_meta(
+                                original_query,
+                                &query_terms,
+                                SearchBackend::Fts,
+                                SearchQueryMode::Expanded,
+                                "bm25",
+                            ),
+                            original_query,
+                            &query_terms,
+                            limit,
+                        ));
                     }
                 }
             }
         }
 
-        self.search_threads_like(&query_terms, &normalized_query, limit, filters)
+        self.search_threads_like(&query_terms, &normalized_query, fallback_limit, filters)
+            .map(|results| {
+                finalize_thread_search_report(
+                    results,
+                    build_search_meta(
+                        original_query,
+                        &query_terms,
+                        SearchBackend::Like,
+                        SearchQueryMode::Expanded,
+                        "field_match_then_recency",
+                    ),
+                    original_query,
+                    &query_terms,
+                    limit,
+                )
+            })
     }
 
     pub fn search_messages(
@@ -371,10 +444,19 @@ impl Store {
         query: &str,
         limit: usize,
         filters: &MessageSearchFilters,
-    ) -> Result<Vec<MessageSearchHit>> {
+    ) -> Result<SearchReport<MessageSearchHit>> {
         let original_query = query.trim();
         if original_query.is_empty() {
-            return Ok(Vec::new());
+            return Ok(SearchReport {
+                search: build_search_meta(
+                    original_query,
+                    &[],
+                    SearchBackend::Like,
+                    SearchQueryMode::Literal,
+                    "field_match_then_recency",
+                ),
+                results: Vec::new(),
+            });
         }
         let query_terms = normalize_query_terms(original_query);
         let normalized_query = if query_terms.is_empty() {
@@ -382,31 +464,84 @@ impl Store {
         } else {
             query_terms.join(" ")
         };
+        let fallback_limit = fallback_candidate_limit(limit);
 
         if self.fts_available {
             if let Ok(results) = self.search_messages_fts(original_query, limit, filters) {
                 if !results.is_empty() {
-                    return Ok(results);
+                    return Ok(finalize_message_search_report(
+                        results,
+                        build_search_meta(
+                            original_query,
+                            &query_terms,
+                            SearchBackend::Fts,
+                            SearchQueryMode::Literal,
+                            "bm25",
+                        ),
+                        original_query,
+                        &query_terms,
+                        limit,
+                    ));
                 }
             }
         }
 
-        let literal_results = self.search_messages_like_literal(original_query, limit, filters)?;
+        let literal_results =
+            self.search_messages_like_literal(original_query, fallback_limit, filters)?;
         if !literal_results.is_empty() {
-            return Ok(literal_results);
+            return Ok(finalize_message_search_report(
+                literal_results,
+                build_search_meta(
+                    original_query,
+                    &query_terms,
+                    SearchBackend::Like,
+                    SearchQueryMode::Literal,
+                    "field_match_then_recency",
+                ),
+                original_query,
+                &query_terms,
+                limit,
+            ));
         }
 
         if self.fts_available && should_expand_query_terms(original_query, &query_terms) {
             if let Some(fts_query) = expanded_fts_query(original_query, &normalized_query) {
                 if let Ok(results) = self.search_messages_fts(&fts_query, limit, filters) {
                     if !results.is_empty() {
-                        return Ok(results);
+                        return Ok(finalize_message_search_report(
+                            results,
+                            build_search_meta(
+                                original_query,
+                                &query_terms,
+                                SearchBackend::Fts,
+                                SearchQueryMode::Expanded,
+                                "bm25",
+                            ),
+                            original_query,
+                            &query_terms,
+                            limit,
+                        ));
                     }
                 }
             }
         }
 
-        self.search_messages_like(&query_terms, &normalized_query, limit, filters)
+        self.search_messages_like(&query_terms, &normalized_query, fallback_limit, filters)
+            .map(|results| {
+                finalize_message_search_report(
+                    results,
+                    build_search_meta(
+                        original_query,
+                        &query_terms,
+                        SearchBackend::Like,
+                        SearchQueryMode::Expanded,
+                        "field_match_then_recency",
+                    ),
+                    original_query,
+                    &query_terms,
+                    limit,
+                )
+            })
     }
 
     pub fn search_events(
@@ -414,10 +549,19 @@ impl Store {
         query: &str,
         limit: usize,
         filters: &EventSearchFilters,
-    ) -> Result<Vec<EventSearchHit>> {
+    ) -> Result<SearchReport<EventSearchHit>> {
         let original_query = query.trim();
         if original_query.is_empty() {
-            return Ok(Vec::new());
+            return Ok(SearchReport {
+                search: build_search_meta(
+                    original_query,
+                    &[],
+                    SearchBackend::Like,
+                    SearchQueryMode::Literal,
+                    "field_match_then_recency",
+                ),
+                results: Vec::new(),
+            });
         }
         let query_terms = normalize_query_terms(original_query);
         let normalized_query = if query_terms.is_empty() {
@@ -425,31 +569,84 @@ impl Store {
         } else {
             query_terms.join(" ")
         };
+        let fallback_limit = fallback_candidate_limit(limit);
 
         if self.fts_available {
             if let Ok(results) = self.search_events_fts(original_query, limit, filters) {
                 if !results.is_empty() {
-                    return Ok(results);
+                    return Ok(finalize_event_search_report(
+                        results,
+                        build_search_meta(
+                            original_query,
+                            &query_terms,
+                            SearchBackend::Fts,
+                            SearchQueryMode::Literal,
+                            "bm25",
+                        ),
+                        original_query,
+                        &query_terms,
+                        limit,
+                    ));
                 }
             }
         }
 
-        let literal_results = self.search_events_like_literal(original_query, limit, filters)?;
+        let literal_results =
+            self.search_events_like_literal(original_query, fallback_limit, filters)?;
         if !literal_results.is_empty() {
-            return Ok(literal_results);
+            return Ok(finalize_event_search_report(
+                literal_results,
+                build_search_meta(
+                    original_query,
+                    &query_terms,
+                    SearchBackend::Like,
+                    SearchQueryMode::Literal,
+                    "field_match_then_recency",
+                ),
+                original_query,
+                &query_terms,
+                limit,
+            ));
         }
 
         if self.fts_available && should_expand_query_terms(original_query, &query_terms) {
             if let Some(fts_query) = expanded_fts_query(original_query, &normalized_query) {
                 if let Ok(results) = self.search_events_fts(&fts_query, limit, filters) {
                     if !results.is_empty() {
-                        return Ok(results);
+                        return Ok(finalize_event_search_report(
+                            results,
+                            build_search_meta(
+                                original_query,
+                                &query_terms,
+                                SearchBackend::Fts,
+                                SearchQueryMode::Expanded,
+                                "bm25",
+                            ),
+                            original_query,
+                            &query_terms,
+                            limit,
+                        ));
                     }
                 }
             }
         }
 
-        self.search_events_like(&query_terms, &normalized_query, limit, filters)
+        self.search_events_like(&query_terms, &normalized_query, fallback_limit, filters)
+            .map(|results| {
+                finalize_event_search_report(
+                    results,
+                    build_search_meta(
+                        original_query,
+                        &query_terms,
+                        SearchBackend::Like,
+                        SearchQueryMode::Expanded,
+                        "field_match_then_recency",
+                    ),
+                    original_query,
+                    &query_terms,
+                    limit,
+                )
+            })
     }
 
     pub fn read_thread(&self, identifier: &str, limit: Option<usize>) -> Result<ThreadRead> {
@@ -546,6 +743,7 @@ impl Store {
                 t.message_count,
                 t.event_count,
                 t.aggregate_text,
+                t.started_at,
                 snippet(threads_fts, 4, '[', ']', '…', 12)
             FROM threads_fts
             JOIN threads t ON t.id = threads_fts.rowid
@@ -559,7 +757,8 @@ impl Store {
 
         let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
             let aggregate_text: String = row.get(6)?;
-            let snippet: Option<String> = row.get(7)?;
+            let started_at: Option<String> = row.get(7)?;
+            let snippet: Option<String> = row.get(8)?;
             Ok(ThreadSearchHit {
                 session_id: row.get(0)?,
                 title: row.get(1)?,
@@ -568,6 +767,9 @@ impl Store {
                 message_count: row.get::<_, i64>(4)? as usize,
                 event_count: row.get::<_, i64>(5)? as usize,
                 snippet: snippet.unwrap_or_else(|| excerpt(&aggregate_text, query, 120)),
+                explain: SearchExplain::default(),
+                aggregate_text,
+                started_at,
             })
         })?;
 
@@ -617,7 +819,7 @@ impl Store {
 
         let sql = format!(
             r#"
-            SELECT session_id, title, cwd, path, message_count, event_count, aggregate_text
+            SELECT session_id, title, cwd, path, message_count, event_count, aggregate_text, started_at
             FROM threads
             WHERE {}
             ORDER BY started_at DESC
@@ -637,6 +839,9 @@ impl Store {
                 message_count: row.get::<_, i64>(4)? as usize,
                 event_count: row.get::<_, i64>(5)? as usize,
                 snippet: excerpt(&aggregate_text, original_query, 120),
+                explain: SearchExplain::default(),
+                aggregate_text,
+                started_at: row.get(7)?,
             })
         })?;
 
@@ -677,7 +882,7 @@ impl Store {
 
         let sql = format!(
             r#"
-            SELECT session_id, title, cwd, path, message_count, event_count, aggregate_text
+            SELECT session_id, title, cwd, path, message_count, event_count, aggregate_text, started_at
             FROM threads
             WHERE {}
             ORDER BY started_at DESC
@@ -697,6 +902,9 @@ impl Store {
                 message_count: row.get::<_, i64>(4)? as usize,
                 event_count: row.get::<_, i64>(5)? as usize,
                 snippet: excerpt(&aggregate_text, normalized_query, 120),
+                explain: SearchExplain::default(),
+                aggregate_text,
+                started_at: row.get(7)?,
             })
         })?;
 
@@ -745,6 +953,7 @@ impl Store {
                 role: row.get(3)?,
                 text: text.clone(),
                 snippet: snippet.unwrap_or_else(|| excerpt(&text, query, 120)),
+                explain: SearchExplain::default(),
             })
         })?;
 
@@ -795,6 +1004,7 @@ impl Store {
                 event_type,
                 summary: summary.clone(),
                 snippet: snippet.unwrap_or_else(|| excerpt(&snippet_source, query, 120)),
+                explain: SearchExplain::default(),
             })
         })?;
 
@@ -863,6 +1073,7 @@ impl Store {
                 role: row.get(3)?,
                 text: text.clone(),
                 snippet: excerpt(&text, original_query, 120),
+                explain: SearchExplain::default(),
             })
         })?;
 
@@ -908,6 +1119,7 @@ impl Store {
                 role: row.get(3)?,
                 text: text.clone(),
                 snippet: excerpt(&text, normalized_query, 120),
+                explain: SearchExplain::default(),
             })
         })?;
 
@@ -954,6 +1166,7 @@ impl Store {
                 event_type,
                 summary: summary.clone(),
                 snippet: excerpt(&snippet_source, original_query, 120),
+                explain: SearchExplain::default(),
             })
         })?;
 
@@ -1006,6 +1219,7 @@ impl Store {
                 event_type,
                 summary: summary.clone(),
                 snippet: excerpt(&snippet_source, normalized_query, 120),
+                explain: SearchExplain::default(),
             })
         })?;
 
@@ -1325,6 +1539,156 @@ fn replace_session(
     Ok(())
 }
 
+fn finalize_thread_search_report(
+    mut results: Vec<ThreadSearchHit>,
+    search: super::search_meta::SearchMeta,
+    query: &str,
+    query_terms: &[String],
+    limit: usize,
+) -> SearchReport<ThreadSearchHit> {
+    if search.backend == SearchBackend::Like {
+        results.sort_by(|left, right| {
+            let left_analysis = analyze_match(query, query_terms, &thread_search_fields(left), 0);
+            let right_analysis = analyze_match(query, query_terms, &thread_search_fields(right), 0);
+
+            right_analysis
+                .fallback_score
+                .cmp(&left_analysis.fallback_score)
+                .then_with(|| right.started_at.cmp(&left.started_at))
+                .then_with(|| left.session_id.cmp(&right.session_id))
+        });
+    }
+
+    if results.len() > limit {
+        results.truncate(limit);
+    }
+
+    for (index, result) in results.iter_mut().enumerate() {
+        result.explain =
+            analyze_match(query, query_terms, &thread_search_fields(result), index + 1).explain;
+    }
+
+    SearchReport { search, results }
+}
+
+fn finalize_message_search_report(
+    mut results: Vec<MessageSearchHit>,
+    search: super::search_meta::SearchMeta,
+    query: &str,
+    query_terms: &[String],
+    limit: usize,
+) -> SearchReport<MessageSearchHit> {
+    if search.backend == SearchBackend::Like {
+        results.sort_by(|left, right| {
+            let left_analysis = analyze_match(query, query_terms, &message_search_fields(left), 0);
+            let right_analysis =
+                analyze_match(query, query_terms, &message_search_fields(right), 0);
+
+            right_analysis
+                .fallback_score
+                .cmp(&left_analysis.fallback_score)
+                .then_with(|| right.timestamp.cmp(&left.timestamp))
+                .then_with(|| left.session_id.cmp(&right.session_id))
+        });
+    }
+
+    if results.len() > limit {
+        results.truncate(limit);
+    }
+
+    for (index, result) in results.iter_mut().enumerate() {
+        result.explain = analyze_match(
+            query,
+            query_terms,
+            &message_search_fields(result),
+            index + 1,
+        )
+        .explain;
+    }
+
+    SearchReport { search, results }
+}
+
+fn finalize_event_search_report(
+    mut results: Vec<EventSearchHit>,
+    search: super::search_meta::SearchMeta,
+    query: &str,
+    query_terms: &[String],
+    limit: usize,
+) -> SearchReport<EventSearchHit> {
+    if search.backend == SearchBackend::Like {
+        results.sort_by(|left, right| {
+            let left_analysis = analyze_match(query, query_terms, &event_search_fields(left), 0);
+            let right_analysis = analyze_match(query, query_terms, &event_search_fields(right), 0);
+
+            right_analysis
+                .fallback_score
+                .cmp(&left_analysis.fallback_score)
+                .then_with(|| right.timestamp.cmp(&left.timestamp))
+                .then_with(|| left.session_id.cmp(&right.session_id))
+        });
+    }
+
+    if results.len() > limit {
+        results.truncate(limit);
+    }
+
+    for (index, result) in results.iter_mut().enumerate() {
+        result.explain =
+            analyze_match(query, query_terms, &event_search_fields(result), index + 1).explain;
+    }
+
+    SearchReport { search, results }
+}
+
+fn thread_search_fields(hit: &ThreadSearchHit) -> [SearchField<'_>; 4] {
+    [
+        SearchField {
+            name: "title",
+            text: Some(hit.title.as_str()),
+            weight: 60,
+        },
+        SearchField {
+            name: "cwd",
+            text: hit.cwd.as_deref(),
+            weight: 20,
+        },
+        SearchField {
+            name: "path",
+            text: Some(hit.path.as_str()),
+            weight: 25,
+        },
+        SearchField {
+            name: "aggregate_text",
+            text: Some(hit.aggregate_text.as_str()),
+            weight: 40,
+        },
+    ]
+}
+
+fn message_search_fields(hit: &MessageSearchHit) -> [SearchField<'_>; 1] {
+    [SearchField {
+        name: "text",
+        text: Some(hit.text.as_str()),
+        weight: 40,
+    }]
+}
+
+fn event_search_fields(hit: &EventSearchHit) -> [SearchField<'_>; 2] {
+    [
+        SearchField {
+            name: "event_type",
+            text: Some(hit.event_type.as_str()),
+            weight: 50,
+        },
+        SearchField {
+            name: "summary",
+            text: Some(hit.summary.as_str()),
+            weight: 30,
+        },
+    ]
+}
+
 fn push_thread_filter_conditions(
     conditions: &mut Vec<String>,
     params: &mut Vec<Value>,
@@ -1439,6 +1803,10 @@ fn qualified_column(alias: &str, column: &str) -> String {
     } else {
         format!("{alias}.{column}")
     }
+}
+
+fn fallback_candidate_limit(limit: usize) -> usize {
+    limit.saturating_mul(5).max(50).min(250)
 }
 
 fn retain_previous_session_id(

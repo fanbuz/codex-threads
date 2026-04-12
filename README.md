@@ -211,6 +211,8 @@ codex-threads --json events search "agent" --event-type agent_reasoning --until 
 - 时间过滤按 RFC3339 时间字符串比较，适合直接复制会话里的时间戳来筛选
 - `--cwd` 和 `--path` 是大小写不敏感的模糊匹配
 - `--json` 输出会额外回显本次命中的 `filters`，方便脚本和 agent 继续处理
+- `--json` 搜索结果还会补充 `search` 元信息，说明这次命中走的是 `fts` 还是 `like`、是否进入 expanded 查询，以及当前排序口径
+- 每条搜索结果会带上 `explain`，用来说明命中了哪些字段、覆盖了多少 query term、是否保留了原始字面量命中
 
 输出约定：
 
