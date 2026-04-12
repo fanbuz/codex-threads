@@ -275,33 +275,35 @@ impl Store {
     }
 
     pub fn search_threads(&self, query: &str, limit: usize) -> Result<Vec<ThreadSearchHit>> {
-        let query = query.trim();
-        if query.is_empty() {
+        let query_terms = normalize_query_terms(query);
+        if query_terms.is_empty() {
             return Ok(Vec::new());
         }
+        let normalized_query = query_terms.join(" ");
 
         if self.fts_available {
-            if let Ok(results) = self.search_threads_fts(query, limit) {
+            if let Ok(results) = self.search_threads_fts(&normalized_query, limit) {
                 return Ok(results);
             }
         }
 
-        self.search_threads_like(query, limit)
+        self.search_threads_like(&query_terms, &normalized_query, limit)
     }
 
     pub fn search_messages(&self, query: &str, limit: usize) -> Result<Vec<MessageSearchHit>> {
-        let query = query.trim();
-        if query.is_empty() {
+        let query_terms = normalize_query_terms(query);
+        if query_terms.is_empty() {
             return Ok(Vec::new());
         }
+        let normalized_query = query_terms.join(" ");
 
         if self.fts_available {
-            if let Ok(results) = self.search_messages_fts(query, limit) {
+            if let Ok(results) = self.search_messages_fts(&normalized_query, limit) {
                 return Ok(results);
             }
         }
 
-        self.search_messages_like(query, limit)
+        self.search_messages_like(&query_terms, &normalized_query, limit)
     }
 
     pub fn read_thread(&self, identifier: &str, limit: Option<usize>) -> Result<ThreadRead> {
@@ -415,22 +417,43 @@ impl Store {
             .map_err(Into::into)
     }
 
-    fn search_threads_like(&self, query: &str, limit: usize) -> Result<Vec<ThreadSearchHit>> {
-        let pattern = format!("%{}%", query);
-        let mut stmt = self.conn.prepare(
+    fn search_threads_like(
+        &self,
+        query_terms: &[String],
+        normalized_query: &str,
+        limit: usize,
+    ) -> Result<Vec<ThreadSearchHit>> {
+        let filters = query_terms
+            .iter()
+            .enumerate()
+            .map(|(idx, _)| {
+                let placeholder = format!("?{}", idx + 1);
+                format!(
+                    "(lower(title) LIKE lower({0}) OR lower(ifnull(cwd, '')) LIKE lower({0}) OR lower(path) LIKE lower({0}) OR lower(aggregate_text) LIKE lower({0}))",
+                    placeholder
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" AND ");
+        let sql = format!(
             r#"
             SELECT session_id, title, cwd, path, message_count, event_count, aggregate_text
             FROM threads
-            WHERE lower(title) LIKE lower(?1)
-                OR lower(ifnull(cwd, '')) LIKE lower(?1)
-                OR lower(path) LIKE lower(?1)
-                OR lower(aggregate_text) LIKE lower(?1)
+            WHERE {filters}
             ORDER BY started_at DESC
-            LIMIT ?2
+            LIMIT ?{limit_placeholder}
             "#,
-        )?;
+            filters = filters,
+            limit_placeholder = query_terms.len() + 1
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut params = query_terms
+            .iter()
+            .map(|term| format!("%{}%", term))
+            .collect::<Vec<_>>();
+        params.push(limit.to_string());
 
-        let rows = stmt.query_map(params![pattern, limit as i64], |row| {
+        let rows = stmt.query_map(rusqlite::params_from_iter(params.iter()), |row| {
             let aggregate_text: String = row.get(6)?;
             Ok(ThreadSearchHit {
                 session_id: row.get(0)?,
@@ -439,7 +462,7 @@ impl Store {
                 path: row.get(3)?,
                 message_count: row.get::<_, i64>(4)? as usize,
                 event_count: row.get::<_, i64>(5)? as usize,
-                snippet: excerpt(&aggregate_text, query, 120),
+                snippet: excerpt(&aggregate_text, normalized_query, 120),
             })
         })?;
 
@@ -483,20 +506,38 @@ impl Store {
             .map_err(Into::into)
     }
 
-    fn search_messages_like(&self, query: &str, limit: usize) -> Result<Vec<MessageSearchHit>> {
-        let pattern = format!("%{}%", query);
-        let mut stmt = self.conn.prepare(
+    fn search_messages_like(
+        &self,
+        query_terms: &[String],
+        normalized_query: &str,
+        limit: usize,
+    ) -> Result<Vec<MessageSearchHit>> {
+        let filters = query_terms
+            .iter()
+            .enumerate()
+            .map(|(idx, _)| format!("lower(m.text) LIKE lower(?{})", idx + 1))
+            .collect::<Vec<_>>()
+            .join(" AND ");
+        let sql = format!(
             r#"
             SELECT m.session_id, t.title, m.timestamp, m.role, m.text
             FROM messages m
             LEFT JOIN threads t ON t.session_id = m.session_id
-            WHERE lower(m.text) LIKE lower(?1)
+            WHERE {filters}
             ORDER BY m.timestamp DESC
-            LIMIT ?2
+            LIMIT ?{limit_placeholder}
             "#,
-        )?;
+            filters = filters,
+            limit_placeholder = query_terms.len() + 1
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut params = query_terms
+            .iter()
+            .map(|term| format!("%{}%", term))
+            .collect::<Vec<_>>();
+        params.push(limit.to_string());
 
-        let rows = stmt.query_map(params![pattern, limit as i64], |row| {
+        let rows = stmt.query_map(rusqlite::params_from_iter(params.iter()), |row| {
             let text: String = row.get(4)?;
             Ok(MessageSearchHit {
                 session_id: row.get(0)?,
@@ -504,7 +545,7 @@ impl Store {
                 timestamp: row.get(2)?,
                 role: row.get(3)?,
                 text: text.clone(),
-                snippet: excerpt(&text, query, 120),
+                snippet: excerpt(&text, normalized_query, 120),
             })
         })?;
 
@@ -672,6 +713,15 @@ impl Store {
                 .map_err(Into::into)
         }
     }
+}
+
+fn normalize_query_terms(query: &str) -> Vec<String> {
+    query
+        .trim()
+        .split(|ch: char| !ch.is_alphanumeric())
+        .filter(|part| !part.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 fn replace_session(

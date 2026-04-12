@@ -43,7 +43,7 @@ pub fn messages(store: &Store, query: &str, limit: usize) -> Result<Rendered> {
         ));
     }
 
-    Rendered::new(lines.join("\n"), &response)
+    Rendered::new(lines.join("\n"), &response).map(|rendered| rendered.with_duration_after_line(1))
 }
 
 pub fn threads(store: &Store, query: &str, limit: usize) -> Result<Rendered> {
@@ -67,5 +67,5 @@ pub fn threads(store: &Store, query: &str, limit: usize) -> Result<Rendered> {
         ));
     }
 
-    Rendered::new(lines.join("\n"), &response)
+    Rendered::new(lines.join("\n"), &response).map(|rendered| rendered.with_duration_after_line(1))
 }

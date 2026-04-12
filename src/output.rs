@@ -7,6 +7,7 @@ use std::time::Duration;
 pub struct Rendered {
     pub text: String,
     pub json: Value,
+    duration_line_index: Option<usize>,
 }
 
 impl Rendered {
@@ -17,7 +18,13 @@ impl Rendered {
         Ok(Self {
             text,
             json: serde_json::to_value(value)?,
+            duration_line_index: None,
         })
+    }
+
+    pub fn with_duration_after_line(mut self, line_index: usize) -> Self {
+        self.duration_line_index = Some(line_index);
+        self
     }
 
     pub fn with_duration(mut self, duration: Duration) -> Self {
@@ -34,12 +41,17 @@ impl Rendered {
         payload.insert("duration_ms".to_string(), Value::from(duration_ms));
         self.json = Value::Object(payload);
 
+        let duration_line = format!("耗时: {}", format_duration(duration));
         if self.text.is_empty() {
-            self.text = format!("耗时: {}", format_duration(duration));
+            self.text = duration_line;
+        } else if let Some(line_index) = self.duration_line_index {
+            let mut lines = self.text.lines().map(str::to_string).collect::<Vec<_>>();
+            let insert_at = line_index.saturating_add(1).min(lines.len());
+            lines.insert(insert_at, duration_line);
+            self.text = lines.join("\n");
         } else {
             self.text.push('\n');
-            self.text
-                .push_str(&format!("耗时: {}", format_duration(duration)));
+            self.text.push_str(&duration_line);
         }
 
         self
@@ -54,7 +66,7 @@ pub fn excerpt(text: &str, query: &str, width: usize) -> String {
 
     let lower_text = normalized.to_lowercase();
     let query_terms = query
-        .split_whitespace()
+        .split(|ch: char| !ch.is_alphanumeric())
         .filter(|part| !part.is_empty())
         .map(str::to_lowercase)
         .collect::<Vec<_>>();

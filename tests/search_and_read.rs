@@ -63,7 +63,7 @@ fn messages_search_returns_matching_snippets() {
 fn human_readable_search_and_read_outputs_use_plain_layout() {
     let (_tmp, sessions_dir, index_dir) = seed_index();
 
-    Command::cargo_bin("codex-threads")
+    let search_output = Command::cargo_bin("codex-threads")
         .unwrap()
         .args([
             "--sessions-dir",
@@ -78,13 +78,23 @@ fn human_readable_search_and_read_outputs_use_plain_layout() {
         ])
         .assert()
         .success()
-        .stdout(predicates::str::contains("消息搜索: Rust and SQLite"))
-        .stdout(predicates::str::contains("命中条数: 1"))
-        .stdout(predicates::str::contains("session-alpha"))
-        .stdout(predicates::str::contains("assistant"))
-        .stdout(predicates::str::contains("耗时:"));
+        .get_output()
+        .stdout
+        .clone();
 
-    Command::cargo_bin("codex-threads")
+    let search_text = String::from_utf8(search_output).unwrap();
+    assert!(search_text.contains("消息搜索: Rust and SQLite"));
+    assert!(search_text.contains("命中条数: 1"));
+    assert!(search_text.contains("session-alpha"));
+    assert!(search_text.contains("assistant"));
+
+    let search_lines = search_text.lines().collect::<Vec<_>>();
+    assert_eq!(search_lines[0], "消息搜索: Rust and SQLite");
+    assert_eq!(search_lines[1], "命中条数: 1");
+    assert!(search_lines[2].starts_with("耗时: "));
+    assert!(search_lines[3].contains("session-alpha"));
+
+    let thread_output = Command::cargo_bin("codex-threads")
         .unwrap()
         .args([
             "--sessions-dir",
@@ -99,11 +109,81 @@ fn human_readable_search_and_read_outputs_use_plain_layout() {
         ])
         .assert()
         .success()
-        .stdout(predicates::str::contains("线程: session-alpha"))
-        .stdout(predicates::str::contains("标题:"))
-        .stdout(predicates::str::contains("消息数:"))
-        .stdout(predicates::str::contains("assistant"))
-        .stdout(predicates::str::contains("耗时:"));
+        .get_output()
+        .stdout
+        .clone();
+
+    let thread_text = String::from_utf8(thread_output).unwrap();
+    assert!(thread_text.contains("线程: session-alpha"));
+    assert!(thread_text.contains("标题:"));
+    assert!(thread_text.contains("消息数:"));
+    assert!(thread_text.contains("assistant"));
+    assert!(thread_text.contains("耗时:"));
+
+    let thread_lines = thread_text.lines().collect::<Vec<_>>();
+    assert_eq!(thread_lines[0], "线程: session-alpha");
+    assert!(thread_lines[1].starts_with("标题: "));
+    assert!(thread_lines[2].starts_with("消息数: "));
+    assert!(thread_lines[3].starts_with("事件数: "));
+    assert!(thread_lines[4].starts_with("- "));
+    assert!(thread_lines.last().unwrap().starts_with("耗时: "));
+}
+
+#[test]
+fn human_readable_messages_and_events_read_place_duration_after_count() {
+    let (_tmp, sessions_dir, index_dir) = seed_index();
+
+    let messages_output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "messages",
+            "read",
+            "session-alpha",
+            "--limit",
+            "2",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let messages_text = String::from_utf8(messages_output).unwrap();
+    let message_lines = messages_text.lines().collect::<Vec<_>>();
+    assert_eq!(message_lines[0], "消息线程: session-alpha");
+    assert_eq!(message_lines[1], "返回条数: 2");
+    assert!(message_lines[2].starts_with("耗时: "));
+    assert!(message_lines[3].starts_with("- "));
+
+    let events_output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "events",
+            "read",
+            "session-alpha",
+            "--limit",
+            "3",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let events_text = String::from_utf8(events_output).unwrap();
+    let event_lines = events_text.lines().collect::<Vec<_>>();
+    assert_eq!(event_lines[0], "事件线程: session-alpha");
+    assert_eq!(event_lines[1], "返回条数: 3");
+    assert!(event_lines[2].starts_with("耗时: "));
+    assert!(event_lines[3].starts_with("- "));
 }
 
 #[test]
@@ -134,6 +214,61 @@ fn threads_search_uses_aggregate_content() {
     assert_eq!(json["command"], "threads.search");
     assert_eq!(json["count"], 1);
     assert_eq!(json["results"][0]["session_id"], "session-beta");
+}
+
+#[test]
+fn search_normalizes_punctuation_in_message_and_thread_queries() {
+    let (_tmp, sessions_dir, index_dir) = seed_index();
+
+    let messages_output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "messages",
+            "search",
+            "Rust, SQLite",
+            "--limit",
+            "5",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let messages_json: Value = serde_json::from_slice(&messages_output).unwrap();
+    assert_eq!(messages_json["command"], "messages.search");
+    assert_eq!(messages_json["count"], 1);
+    assert_eq!(messages_json["results"][0]["session_id"], "session-alpha");
+
+    let threads_output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "threads",
+            "search",
+            "CLI, search",
+            "--limit",
+            "5",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let threads_json: Value = serde_json::from_slice(&threads_output).unwrap();
+    assert_eq!(threads_json["command"], "threads.search");
+    assert_eq!(threads_json["count"], 1);
+    assert_eq!(threads_json["results"][0]["session_id"], "session-alpha");
 }
 
 #[test]
