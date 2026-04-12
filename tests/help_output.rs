@@ -14,7 +14,7 @@ fn top_level_help_shows_command_descriptions() {
         ))
         .stdout(predicate::str::contains("threads   搜索和读取线程"))
         .stdout(predicate::str::contains("messages  搜索和读取消息"))
-        .stdout(predicate::str::contains("events    读取事件记录"));
+        .stdout(predicate::str::contains("events    搜索和读取事件记录"));
 }
 
 #[test]
@@ -44,5 +44,8 @@ fn nested_help_shows_subcommand_descriptions() {
         .args(["events", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("read  读取指定线程里的事件记录"));
+        .stdout(predicate::str::contains(
+            "search  在所有历史事件中搜索关键词",
+        ))
+        .stdout(predicate::str::contains("read    读取指定线程里的事件记录"));
 }

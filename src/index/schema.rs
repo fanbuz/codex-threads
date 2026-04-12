@@ -64,6 +64,9 @@ pub fn init_schema(conn: &Connection) -> Result<bool> {
 
         CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts
         USING fts5(session_id UNINDEXED, role UNINDEXED, text);
+
+        CREATE VIRTUAL TABLE IF NOT EXISTS events_fts
+        USING fts5(session_id UNINDEXED, event_type, summary);
         "#,
     );
 
@@ -74,6 +77,7 @@ pub fn init_schema(conn: &Connection) -> Result<bool> {
             r#"
             DROP TABLE IF EXISTS threads_fts;
             DROP TABLE IF EXISTS messages_fts;
+            DROP TABLE IF EXISTS events_fts;
             "#,
         );
         Ok(false)

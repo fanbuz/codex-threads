@@ -217,6 +217,69 @@ fn threads_search_uses_aggregate_content() {
 }
 
 #[test]
+fn events_search_returns_matching_results() {
+    let (_tmp, sessions_dir, index_dir) = seed_index();
+
+    let output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "events",
+            "search",
+            "agent_reasoning",
+            "--limit",
+            "5",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["command"], "events.search");
+    assert_eq!(json["count"], 2);
+    assert_eq!(json["results"][0]["session_id"], "session-beta");
+    assert_eq!(json["results"][0]["event_type"], "agent_reasoning");
+}
+
+#[test]
+fn human_readable_events_search_uses_plain_layout() {
+    let (_tmp, sessions_dir, index_dir) = seed_index();
+
+    let output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "events",
+            "search",
+            "Planning CLI surface",
+            "--limit",
+            "5",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let text = String::from_utf8(output).unwrap();
+    let lines = text.lines().collect::<Vec<_>>();
+    assert_eq!(lines[0], "事件搜索: Planning CLI surface");
+    assert_eq!(lines[1], "命中条数: 1");
+    assert!(lines[2].starts_with("耗时: "));
+    assert!(lines[3].contains("session-alpha"));
+    assert!(lines[3].contains("agent_reasoning"));
+}
+
+#[test]
 fn search_normalizes_punctuation_in_message_and_thread_queries() {
     let (_tmp, sessions_dir, index_dir) = seed_index();
 
