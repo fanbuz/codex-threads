@@ -36,6 +36,7 @@ If you add or change a command, include:
 - issue 标题只描述任务本身，不要把版本号直接写进标题
 - 版本归属通过 GitHub milestone 管理，例如 `0.0.3`
 - 提交信息请显式关联 issue 编号，便于 release notes 汇总关联 issue
+- issue、文档和对外说明尽量使用自然、顺口、便于理解的表达，避免生硬机械的措辞
 
 ## Style
 
