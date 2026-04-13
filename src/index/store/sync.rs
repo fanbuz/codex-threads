@@ -14,9 +14,11 @@ use crate::parser::ParsedSession;
 
 use super::super::progress::{SyncProgressEvent, SyncProgressObserver};
 use super::super::types::{
-    SyncFailure, SyncPlan, SyncPreflight, SyncReport, SyncRequest, SyncScope, SyncStats,
+    SyncCooldown, SyncCooldownPolicy, SyncFailure, SyncPlan, SyncPreflight, SyncReport,
+    SyncRequest, SyncScope, SyncStats,
 };
 use super::lock::SyncLockGuard;
+use super::refresh::SyncRefreshState;
 use super::resume::{build_sync_resume, SyncResumeState};
 use super::Store;
 
@@ -50,14 +52,30 @@ struct PreparedSyncRun {
     resumed_from_checkpoint: bool,
 }
 
+#[derive(Debug, Clone)]
+struct SyncCooldownDecision {
+    cooldown: SyncCooldown,
+    should_skip: bool,
+}
+
 impl Store {
     pub(crate) fn run_sync(
         &mut self,
         sessions_dir: &Path,
         request: &SyncRequest,
+        cooldown_policy: &SyncCooldownPolicy,
         mut lock: Option<&mut SyncLockGuard>,
         progress: &mut Option<&mut dyn SyncProgressObserver>,
     ) -> Result<(SyncPlan, SyncReport)> {
+        ensure_sessions_dir_exists(sessions_dir)?;
+
+        let cooldown = self.evaluate_sync_cooldown(request, cooldown_policy)?;
+        if cooldown.should_skip {
+            let plan = build_cooldown_skip_plan(request);
+            let report = self.cooldown_skip_sync_report(&cooldown.cooldown, progress)?;
+            return Ok((plan, report));
+        }
+
         let existing = self.load_existing_files()?;
         let prepared = self.prepare_sync_run(
             sessions_dir,
@@ -87,13 +105,29 @@ impl Store {
             preflight: preflight.clone(),
         };
 
-        if preflight.recommended_action == "skip" {
-            let report =
-                self.skip_sync_report(sessions_dir, &preflight, request, &prepared, progress)?;
-            return Ok((plan, report));
+        let mut report = if preflight.recommended_action == "skip" {
+            self.skip_sync_report(
+                &preflight,
+                request,
+                &prepared,
+                cooldown.cooldown.clone(),
+                progress,
+            )?
+        } else {
+            self.sync_sessions(
+                existing,
+                request,
+                prepared,
+                cooldown.cooldown.clone(),
+                lock,
+                progress,
+            )?
+        };
+
+        if !report.partial {
+            self.record_successful_sync(request, &mut report.cooldown)?;
         }
 
-        let report = self.sync_sessions(existing, request, prepared, lock, progress)?;
         Ok((plan, report))
     }
 
@@ -167,6 +201,7 @@ impl Store {
         existing: HashMap<String, FileState>,
         request: &SyncRequest,
         prepared: PreparedSyncRun,
+        cooldown: SyncCooldown,
         mut lock: Option<&mut SyncLockGuard>,
         progress: &mut Option<&mut dyn SyncProgressObserver>,
     ) -> Result<SyncReport> {
@@ -327,6 +362,7 @@ impl Store {
             partial: !failures.is_empty() || resume.state == "saved",
             stats,
             failures,
+            cooldown,
             resume,
         };
         emit_progress(
@@ -345,16 +381,12 @@ impl Store {
 
     fn skip_sync_report(
         &self,
-        sessions_dir: &Path,
         preflight: &SyncPreflight,
         request: &SyncRequest,
         prepared: &PreparedSyncRun,
+        cooldown: SyncCooldown,
         progress: &mut Option<&mut dyn SyncProgressObserver>,
     ) -> Result<SyncReport> {
-        if !sessions_dir.exists() {
-            bail!("会话目录不存在: {}", sessions_dir.display());
-        }
-
         let counts = self.count_totals()?;
         let resume = self.finalize_sync_resume_state(request, prepared, 0)?;
         let report = SyncReport {
@@ -370,6 +402,7 @@ impl Store {
                 events: counts.2,
             },
             failures: Vec::new(),
+            cooldown,
             resume,
         };
         emit_progress(
@@ -431,6 +464,119 @@ impl Store {
         ))
     }
 
+    fn cooldown_skip_sync_report(
+        &self,
+        cooldown: &SyncCooldown,
+        progress: &mut Option<&mut dyn SyncProgressObserver>,
+    ) -> Result<SyncReport> {
+        let counts = self.count_totals()?;
+        let report = SyncReport {
+            partial: false,
+            stats: SyncStats {
+                scanned_files: 0,
+                indexed_files: 0,
+                skipped_files: 0,
+                failed_files: 0,
+                removed_files: 0,
+                threads: counts.0,
+                messages: counts.1,
+                events: counts.2,
+            },
+            failures: Vec::new(),
+            cooldown: cooldown.clone(),
+            resume: build_sync_resume(
+                self.sync_resume_state_path(),
+                "idle",
+                None,
+                false,
+                0,
+                0,
+                None,
+            ),
+        };
+        emit_progress(
+            progress,
+            SyncProgressEvent::Finished {
+                total_files: 0,
+                processed_files: 0,
+                indexed_files: 0,
+                skipped_files: 0,
+                failed_files: 0,
+                partial: false,
+            },
+        );
+        Ok(report)
+    }
+
+    fn evaluate_sync_cooldown(
+        &self,
+        request: &SyncRequest,
+        cooldown_policy: &SyncCooldownPolicy,
+    ) -> Result<SyncCooldownDecision> {
+        let refresh_state = self
+            .load_sync_refresh_state()?
+            .filter(|state| state.request == *request);
+        let mut cooldown = SyncCooldown {
+            state: if cooldown_policy.force {
+                "bypassed".to_string()
+            } else {
+                "ready".to_string()
+            },
+            interval: cooldown_policy.interval.clone(),
+            interval_seconds: cooldown_policy.interval_seconds,
+            last_completed_at: None,
+            next_allowed_at: None,
+            reason: None,
+        };
+
+        if let Some(state) = refresh_state {
+            cooldown.last_completed_at = Some(state.completed_at.clone());
+            cooldown.next_allowed_at = Some(next_allowed_at(
+                &state.completed_at,
+                cooldown_policy.interval_seconds,
+            )?);
+
+            if cooldown_policy.force {
+                cooldown.reason = Some("已通过 --force 跳过冷却检查".to_string());
+                return Ok(SyncCooldownDecision {
+                    cooldown,
+                    should_skip: false,
+                });
+            }
+
+            if is_cooldown_active(&state.completed_at, cooldown_policy.interval_seconds)? {
+                cooldown.state = "active".to_string();
+                cooldown.reason = Some("最近刚同步过，命中冷却时间".to_string());
+                return Ok(SyncCooldownDecision {
+                    cooldown,
+                    should_skip: true,
+                });
+            }
+        } else if cooldown_policy.force {
+            cooldown.reason = Some("已通过 --force 跳过冷却检查".to_string());
+        }
+
+        Ok(SyncCooldownDecision {
+            cooldown,
+            should_skip: false,
+        })
+    }
+
+    fn record_successful_sync(
+        &self,
+        request: &SyncRequest,
+        cooldown: &mut SyncCooldown,
+    ) -> Result<()> {
+        let state = SyncRefreshState::new(request.clone())?;
+        self.save_sync_refresh_state(&state)?;
+        cooldown.last_completed_at = Some(state.completed_at.clone());
+        cooldown.next_allowed_at = Some(next_allowed_at(
+            &state.completed_at,
+            cooldown.interval_seconds,
+        )?);
+        Ok(())
+    }
+
     fn load_existing_files(&self) -> Result<HashMap<String, FileState>> {
         let mut stmt = self
             .conn
@@ -460,6 +606,35 @@ fn is_unchanged(existing: &HashMap<String, FileState>, candidate: &CandidateFile
         .get(&candidate.path_string)
         .map(|state| state.modified_at == candidate.modified_at && state.size == candidate.size)
         .unwrap_or(false)
+}
+
+fn ensure_sessions_dir_exists(sessions_dir: &Path) -> Result<()> {
+    if !sessions_dir.exists() {
+        bail!("会话目录不存在: {}", sessions_dir.display());
+    }
+    Ok(())
+}
+
+fn build_cooldown_skip_plan(request: &SyncRequest) -> SyncPlan {
+    SyncPlan {
+        scope: SyncScope {
+            since: request.since.clone(),
+            until: request.until.clone(),
+            path: request.path.clone(),
+            recent: request.recent,
+            budget_files: request.budget_files,
+            candidate_files: 0,
+        },
+        preflight: SyncPreflight {
+            total_files: 0,
+            changed_files: 0,
+            unchanged_files: 0,
+            total_bytes: 0,
+            largest_file_bytes: 0,
+            recommended_action: "skip".to_string(),
+            reason: "最近刚同步过，命中冷却时间".to_string(),
+        },
+    }
 }
 
 fn split_budgeted_candidates(
@@ -892,6 +1067,25 @@ fn system_time_to_nanos(time: SystemTime) -> Result<i64> {
         .duration_since(UNIX_EPOCH)
         .map_err(|error| anyhow!("invalid system time: {}", error))?;
     Ok(duration.as_nanos() as i64)
+}
+
+fn next_allowed_at(completed_at: &str, interval_seconds: u64) -> Result<String> {
+    let completed_at = parse_completed_at(completed_at)?;
+    let next_allowed = completed_at + time::Duration::seconds(interval_seconds as i64);
+    next_allowed
+        .format(&Rfc3339)
+        .map_err(|error| anyhow!("failed to format cooldown time: {}", error))
+}
+
+fn is_cooldown_active(completed_at: &str, interval_seconds: u64) -> Result<bool> {
+    let completed_at = parse_completed_at(completed_at)?;
+    let next_allowed = completed_at + time::Duration::seconds(interval_seconds as i64);
+    Ok(OffsetDateTime::now_utc() < next_allowed)
+}
+
+fn parse_completed_at(value: &str) -> Result<OffsetDateTime> {
+    OffsetDateTime::parse(value, &Rfc3339)
+        .with_context(|| format!("failed to parse sync refresh timestamp {}", value))
 }
 
 fn classify_preflight(

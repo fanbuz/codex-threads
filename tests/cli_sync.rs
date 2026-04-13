@@ -22,6 +22,7 @@ fn sync_reports_indexed_files() {
             "--index-dir",
             index_dir.to_str().unwrap(),
             "sync",
+            "--force",
         ])
         .assert()
         .success()
@@ -61,6 +62,8 @@ fn sync_text_output_uses_plain_lines() {
         .assert()
         .success()
         .stdout(predicates::str::contains("同步预检"))
+        .stdout(predicates::str::contains("同步冷却"))
+        .stdout(predicates::str::contains("冷却时间: 30m"))
         .stdout(predicates::str::contains("推荐动作: 执行同步"))
         .stdout(predicates::str::contains("同步完成"))
         .stdout(predicates::str::contains("会话目录:"))
@@ -100,6 +103,7 @@ fn sync_is_incremental_for_unchanged_and_changed_files() {
             "--index-dir",
             index_dir.to_str().unwrap(),
             "sync",
+            "--force",
         ])
         .assert()
         .success()
@@ -124,6 +128,7 @@ fn sync_is_incremental_for_unchanged_and_changed_files() {
             "--index-dir",
             index_dir.to_str().unwrap(),
             "sync",
+            "--force",
         ])
         .assert()
         .success()
@@ -174,6 +179,7 @@ fn sync_replaces_existing_session_when_same_session_id_moves_to_new_path() {
             "--index-dir",
             index_dir.to_str().unwrap(),
             "sync",
+            "--force",
         ])
         .assert()
         .success()
@@ -203,6 +209,7 @@ fn sync_tolerates_invalid_jsonl_and_reports_failed_files() {
             "--index-dir",
             index_dir.to_str().unwrap(),
             "sync",
+            "--force",
         ])
         .assert()
         .success()
@@ -274,6 +281,7 @@ fn sync_keeps_previous_index_when_existing_file_temporarily_breaks() {
             "--index-dir",
             index_dir.to_str().unwrap(),
             "sync",
+            "--force",
         ])
         .assert()
         .success()
@@ -701,4 +709,169 @@ fn sync_lock_fixture_writes_valid_json_for_windows_style_paths() {
             .to_string_lossy()
             .to_string()
     );
+}
+
+#[test]
+fn sync_skips_recent_repeat_runs_with_default_cooldown() {
+    let tmp = tempdir().unwrap();
+    let _ = common::write_fixture_sessions(tmp.path());
+    let index_dir = tmp.path().join("index");
+    let sessions_dir = tmp.path().join("sessions");
+
+    Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "sync",
+        ])
+        .assert()
+        .success();
+
+    let output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "sync",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["cooldown"]["state"], "active");
+    assert_eq!(json["cooldown"]["interval"], "30m");
+    assert_eq!(json["preflight"]["recommended_action"], "skip");
+    assert!(json["preflight"]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("冷却时间"));
+    assert_eq!(json["stats"]["indexed_files"], 0);
+}
+
+#[test]
+fn sync_accepts_custom_cooldown_interval() {
+    let tmp = tempdir().unwrap();
+    let _ = common::write_fixture_sessions(tmp.path());
+    let index_dir = tmp.path().join("index");
+    let sessions_dir = tmp.path().join("sessions");
+
+    Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "sync",
+            "--cooldown",
+            "45s",
+        ])
+        .assert()
+        .success();
+
+    let output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "sync",
+            "--cooldown",
+            "45s",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["cooldown"]["state"], "active");
+    assert_eq!(json["cooldown"]["interval"], "45s");
+}
+
+#[test]
+fn sync_force_bypasses_cooldown_and_continues_normal_preflight() {
+    let tmp = tempdir().unwrap();
+    let _ = common::write_fixture_sessions(tmp.path());
+    let index_dir = tmp.path().join("index");
+    let sessions_dir = tmp.path().join("sessions");
+
+    Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "sync",
+        ])
+        .assert()
+        .success();
+
+    let output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "sync",
+            "--force",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["cooldown"]["state"], "bypassed");
+    assert_eq!(json["preflight"]["recommended_action"], "skip");
+    assert_eq!(json["preflight"]["reason"], "未检测到发生变化的会话文件");
+}
+
+#[test]
+fn sync_rejects_invalid_cooldown_interval() {
+    let tmp = tempdir().unwrap();
+    let _ = common::write_fixture_sessions(tmp.path());
+    let index_dir = tmp.path().join("index");
+    let sessions_dir = tmp.path().join("sessions");
+
+    let output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "sync",
+            "--cooldown",
+            "1d",
+        ])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["ok"], false);
+    assert!(json["error"].as_str().unwrap().contains("--cooldown"));
 }

@@ -95,5 +95,7 @@ fn sync_help_shows_scope_options() {
         .stdout(predicate::str::contains("--until <UNTIL>"))
         .stdout(predicate::str::contains("--path <PATH>"))
         .stdout(predicate::str::contains("--recent <RECENT>"))
-        .stdout(predicate::str::contains("--budget-files <BUDGET_FILES>"));
+        .stdout(predicate::str::contains("--budget-files <BUDGET_FILES>"))
+        .stdout(predicate::str::contains("--cooldown <COOLDOWN>"))
+        .stdout(predicate::str::contains("--force"));
 }

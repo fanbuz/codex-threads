@@ -1,15 +1,14 @@
 use std::io::{self, IsTerminal, Write};
 use std::path::Path;
 
-use anyhow::Result;
-use serde::Serialize;
-
 use crate::cli::SyncArgs;
 use crate::index::{
-    StatusSummary, Store, SyncFailure, SyncPreflight, SyncProgressEvent, SyncProgressObserver,
-    SyncRequest, SyncResume, SyncScope, SyncStats,
+    StatusSummary, Store, SyncCooldown, SyncCooldownPolicy, SyncFailure, SyncPreflight,
+    SyncProgressEvent, SyncProgressObserver, SyncRequest, SyncResume, SyncScope, SyncStats,
 };
 use crate::output::Rendered;
+use anyhow::{anyhow, bail, Result};
+use serde::Serialize;
 
 #[derive(Debug, Serialize)]
 struct SyncResponse {
@@ -18,6 +17,7 @@ struct SyncResponse {
     partial: bool,
     scope: SyncScope,
     preflight: SyncPreflight,
+    cooldown: SyncCooldown,
     progress: SyncProgressSummary,
     resume: SyncResume,
     sessions_dir: String,
@@ -256,6 +256,7 @@ pub fn run(
     args: &SyncArgs,
 ) -> Result<Rendered> {
     let request = build_request(args);
+    let cooldown = parse_cooldown_policy(args)?;
     let mut sync_lock = store.acquire_sync_lock()?;
     sync_lock.heartbeat()?;
     let mut progress = SyncProgressReporter::new();
@@ -263,6 +264,7 @@ pub fn run(
     let (plan, report) = store.run_sync(
         sessions_dir,
         &request,
+        &cooldown,
         Some(&mut sync_lock),
         &mut progress_observer,
     )?;
@@ -274,6 +276,7 @@ pub fn run(
         partial: report.partial,
         scope: plan.scope.clone(),
         preflight: plan.preflight.clone(),
+        cooldown: report.cooldown.clone(),
         progress: progress.clone(),
         resume: report.resume.clone(),
         sessions_dir: sessions_dir.to_string_lossy().into_owned(),
@@ -300,6 +303,23 @@ pub fn run(
         format!("预算文件: {}", render_scope_budget(plan.scope.budget_files)),
         format!("候选文件: {}", plan.scope.candidate_files),
         String::new(),
+        "同步冷却".to_string(),
+        format!("冷却时间: {}", report.cooldown.interval),
+        format!("冷却状态: {}", render_cooldown_state(&report.cooldown)),
+        format!(
+            "最近刷新: {}",
+            render_optional_time(report.cooldown.last_completed_at.as_deref())
+        ),
+        format!(
+            "下次允许: {}",
+            render_optional_time(report.cooldown.next_allowed_at.as_deref())
+        ),
+    ];
+    if let Some(reason) = &report.cooldown.reason {
+        lines.push(format!("冷却说明: {}", reason));
+    }
+    lines.extend([
+        String::new(),
         "同步预检".to_string(),
         format!("会话文件: {}", plan.preflight.total_files),
         format!("变更文件: {}", plan.preflight.changed_files),
@@ -312,7 +332,9 @@ pub fn run(
         format!("推荐动作: {}", render_action(&plan.preflight)),
         format!("原因: {}", plan.preflight.reason),
         String::new(),
-        if !report.failures.is_empty() {
+        if report.cooldown.state == "active" {
+            "同步完成（命中冷却时间）".to_string()
+        } else if !report.failures.is_empty() {
             "同步完成（部分失败）".to_string()
         } else if report.resume.state == "saved" {
             "同步完成（部分完成）".to_string()
@@ -337,7 +359,7 @@ pub fn run(
             render_bool(report.resume.resumed_from_checkpoint)
         ),
         format!("剩余文件: {}", report.resume.remaining_files),
-    ];
+    ]);
     if report.resume.state != "idle" {
         lines.push(format!("续跑状态文件: {}", report.resume.state_path));
     }
@@ -360,6 +382,41 @@ fn build_request(args: &SyncArgs) -> SyncRequest {
         recent: args.recent,
         budget_files: args.budget_files,
     }
+}
+
+fn parse_cooldown_policy(args: &SyncArgs) -> Result<SyncCooldownPolicy> {
+    let interval = args.cooldown.clone().unwrap_or_else(|| "30m".to_string());
+    let interval_seconds = parse_cooldown_interval(&interval)?;
+    Ok(SyncCooldownPolicy {
+        interval,
+        interval_seconds,
+        force: args.force,
+    })
+}
+
+fn parse_cooldown_interval(raw: &str) -> Result<u64> {
+    let value = raw.trim();
+    if value.len() < 2 {
+        bail!("--cooldown 需要使用类似 30m、45s 或 2h 的格式");
+    }
+
+    let (digits, unit) = value.split_at(value.len() - 1);
+    if digits.is_empty() || !digits.chars().all(|ch| ch.is_ascii_digit()) {
+        bail!("--cooldown 需要使用类似 30m、45s 或 2h 的格式");
+    }
+
+    let amount = digits
+        .parse::<u64>()
+        .map_err(|error| anyhow!("failed to parse cooldown interval: {}", error))?;
+    let multiplier = match unit {
+        "s" => 1,
+        "m" => 60,
+        "h" => 60 * 60,
+        _ => bail!("--cooldown 仅支持 s、m、h 单位"),
+    };
+    amount
+        .checked_mul(multiplier)
+        .ok_or_else(|| anyhow!("--cooldown 超出可支持的时间范围"))
 }
 
 fn render_action(preflight: &SyncPreflight) -> &'static str {
@@ -391,6 +448,18 @@ fn render_scope_budget(value: Option<usize>) -> String {
         Some(limit) => format!("每次最多 {} 个文件", limit),
         None => "不限制".to_string(),
     }
+}
+
+fn render_cooldown_state(cooldown: &SyncCooldown) -> &'static str {
+    match cooldown.state.as_str() {
+        "active" => "命中冷却时间",
+        "bypassed" => "已通过 --force 跳过",
+        _ => "可继续同步",
+    }
+}
+
+fn render_optional_time(value: Option<&str>) -> &str {
+    value.unwrap_or("无")
 }
 
 fn render_resume_state(resume: &SyncResume) -> &'static str {

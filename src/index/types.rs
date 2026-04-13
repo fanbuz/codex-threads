@@ -25,7 +25,28 @@ pub struct SyncReport {
     pub stats: SyncStats,
     pub partial: bool,
     pub failures: Vec<SyncFailure>,
+    pub cooldown: SyncCooldown,
     pub resume: SyncResume,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncCooldown {
+    pub state: String,
+    pub interval: String,
+    pub interval_seconds: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_completed_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_allowed_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SyncCooldownPolicy {
+    pub interval: String,
+    pub interval_seconds: u64,
+    pub force: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

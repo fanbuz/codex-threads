@@ -79,6 +79,16 @@ pub struct SyncArgs {
         help = "单次同步最多处理多少个会话文件"
     )]
     pub budget_files: Option<usize>,
+
+    #[arg(
+        long,
+        value_name = "COOLDOWN",
+        help = "同范围同步的冷却时间，默认 30m，可用单位: s/m/h"
+    )]
+    pub cooldown: Option<String>,
+
+    #[arg(long, help = "忽略冷却时间，强制执行本次同步")]
+    pub force: bool,
 }
 
 #[derive(Debug, Subcommand)]

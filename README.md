@@ -181,6 +181,8 @@ codex-threads sync --since 2026-04-12T10:30:00Z
 codex-threads sync --path session-beta
 codex-threads --json sync --recent 20
 codex-threads --json sync --budget-files 200
+codex-threads --json sync --cooldown 45m
+codex-threads sync --force
 codex-threads messages search "build a CLI" --limit 20
 codex-threads events search "agent_reasoning" --limit 20
 codex-threads --json threads search "websocket reconnect"
@@ -203,6 +205,8 @@ codex-threads status
 - `--path PATH` 只同步路径命中该片段的会话文件
 - `--recent N` 只同步最近活跃的 N 个会话文件
 - `--budget-files N` 单次最多处理 N 个需要刷新的会话文件；超出部分会保存为本地续跑状态，等待下次同参数 `sync` 继续处理
+- `--cooldown INTERVAL` 同范围同步的冷却时间，默认 `30m`，支持 `s` / `m` / `h` 单位
+- `--force` 忽略冷却时间，立即执行本次同步
 
 搜索过滤参数：
 
@@ -233,8 +237,9 @@ codex-threads --json events search "agent" --event-type agent_reasoning --until 
 - 耗时会按时长动态显示为 `ms` 或 `s`
 - `--json` 模式不输出格式化耗时文本，只提供稳定字段 `duration_ms`
 - `sync` 会先输出一段“同步范围”摘要，明确本次时间范围、路径过滤、最近活跃限制和命中的候选文件数
+- `sync` 会输出一段“同步冷却”摘要，说明当前冷却间隔、是否命中冷却、最近一次成功刷新时间，以及下次允许刷新时间
 - `sync` 在真正执行前会先输出一段同步预检摘要，说明本次检测到的文件规模、变更数量和建议动作
-- `--json sync` 会额外返回 `scope`、`preflight` 和 `resume` 字段，方便 agent 先理解这次同步实际覆盖的范围，以及是应当跳过、继续执行，还是进入续跑
+- `--json sync` 会额外返回 `scope`、`cooldown`、`preflight` 和 `resume` 字段，方便 agent 先理解这次同步实际覆盖的范围，以及是应当跳过、继续执行，还是进入续跑
 - 长时间运行的 `sync` 会在 `stderr` 持续输出阶段进度；非交互环境下使用稳定的阶段文本，交互式终端下会退化成单行进度条样式
 - `--json sync` 在保留 `stderr` 进度反馈的同时，还会额外返回 `progress` 字段，方便 agent 在结束后读取本次阶段和进度汇总
 - 同一个索引目录同一时间只允许一个 `sync` 写任务运行；如果命中活跃锁，新的 `sync` 会直接退出并提示已有同步正在进行
@@ -243,6 +248,7 @@ codex-threads --json events search "agent" --event-type agent_reasoning --until 
 - 范围化 `sync` 只更新命中范围，不会顺带清理范围外历史；如果要做完整清理，请直接运行不带范围参数的 `sync`
 - 当 `--budget-files` 命中预算上限时，本次 `sync` 会返回 `partial=true` 和 `resume.state=saved`，并在索引目录旁写入 `sync.resume.json`
 - 后续只要再次用相同参数执行 `sync`，CLI 会自动从 `sync.resume.json` 继续，直到 `resume.state=completed` 后清理这个本地状态文件
+- 成功完成一次 `sync` 后，CLI 会在索引目录旁写入 `sync.refresh.json` 记录最近一次刷新时间；同参数的后续 `sync` 默认会在 `30m` 冷却窗口内直接跳过，避免 agent 在短时间内重复刷新
 
 ## 设计要点
 

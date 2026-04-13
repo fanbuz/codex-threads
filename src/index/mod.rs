@@ -9,7 +9,7 @@ pub use search_meta::{SearchBackend, SearchExplain, SearchMeta, SearchQueryMode,
 pub use store::Store;
 pub use types::{
     EventRecord, EventSearchFilters, EventSearchHit, MessageRecord, MessageSearchFilters,
-    MessageSearchHit, StatusSummary, SyncFailure, SyncLockStatus, SyncPlan, SyncPreflight,
-    SyncReport, SyncRequest, SyncResume, SyncScope, SyncStats, ThreadRead, ThreadRecord,
-    ThreadSearchFilters, ThreadSearchHit,
+    MessageSearchHit, StatusSummary, SyncCooldown, SyncCooldownPolicy, SyncFailure, SyncLockStatus,
+    SyncPlan, SyncPreflight, SyncReport, SyncRequest, SyncResume, SyncScope, SyncStats, ThreadRead,
+    ThreadRecord, ThreadSearchFilters, ThreadSearchHit,
 };

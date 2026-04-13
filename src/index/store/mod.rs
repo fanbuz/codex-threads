@@ -1,5 +1,6 @@
 mod lock;
 mod read;
+mod refresh;
 mod resume;
 mod search;
 mod sync;
