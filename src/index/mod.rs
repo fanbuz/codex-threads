@@ -7,6 +7,6 @@ pub use search_meta::{SearchBackend, SearchExplain, SearchMeta, SearchQueryMode,
 pub use store::Store;
 pub use types::{
     EventRecord, EventSearchFilters, EventSearchHit, MessageRecord, MessageSearchFilters,
-    MessageSearchHit, StatusSummary, SyncFailure, SyncReport, SyncStats, ThreadRead, ThreadRecord,
-    ThreadSearchFilters, ThreadSearchHit,
+    MessageSearchHit, StatusSummary, SyncFailure, SyncPreflight, SyncReport, SyncStats, ThreadRead,
+    ThreadRecord, ThreadSearchFilters, ThreadSearchHit,
 };

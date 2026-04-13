@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::Result;
 use serde::Serialize;
 
-use crate::index::{StatusSummary, Store, SyncFailure, SyncStats};
+use crate::index::{StatusSummary, Store, SyncFailure, SyncPreflight, SyncStats};
 use crate::output::Rendered;
 
 #[derive(Debug, Serialize)]
@@ -11,6 +11,7 @@ struct SyncResponse {
     command: &'static str,
     ok: bool,
     partial: bool,
+    preflight: SyncPreflight,
     sessions_dir: String,
     index_dir: String,
     stats: SyncStats,
@@ -26,11 +27,17 @@ struct StatusResponse {
 }
 
 pub fn run(store: &mut Store, sessions_dir: &Path, index_dir: &Path) -> Result<Rendered> {
-    let report = store.sync_sessions(sessions_dir)?;
+    let preflight = store.preflight_sync(sessions_dir)?;
+    let report = if preflight.recommended_action == "skip" {
+        store.skip_sync_report(sessions_dir, &preflight)?
+    } else {
+        store.sync_sessions(sessions_dir)?
+    };
     let response = SyncResponse {
         command: "sync",
         ok: true,
         partial: report.partial,
+        preflight: preflight.clone(),
         sessions_dir: sessions_dir.to_string_lossy().into_owned(),
         index_dir: index_dir.to_string_lossy().into_owned(),
         stats: report.stats.clone(),
@@ -38,8 +45,19 @@ pub fn run(store: &mut Store, sessions_dir: &Path, index_dir: &Path) -> Result<R
     };
 
     let mut lines = vec![
+        "同步预检".to_string(),
+        format!("会话文件: {}", preflight.total_files),
+        format!("变更文件: {}", preflight.changed_files),
+        format!("未变更文件: {}", preflight.unchanged_files),
+        format!("总大小: {}", format_bytes(preflight.total_bytes)),
+        format!("最大文件: {}", format_bytes(preflight.largest_file_bytes)),
+        format!("推荐动作: {}", render_action(&preflight)),
+        format!("原因: {}", preflight.reason),
+        String::new(),
         if report.partial {
             "同步完成（部分失败）".to_string()
+        } else if preflight.recommended_action == "skip" {
+            "同步完成（无需更新）".to_string()
         } else {
             "同步完成".to_string()
         },
@@ -60,6 +78,32 @@ pub fn run(store: &mut Store, sessions_dir: &Path, index_dir: &Path) -> Result<R
     let text = lines.join("\n");
 
     Rendered::new(text, &response)
+}
+
+fn render_action(preflight: &SyncPreflight) -> &'static str {
+    match preflight.recommended_action.as_str() {
+        "skip" => "跳过同步",
+        "heavy-sync" => "执行同步（预计较重）",
+        "rebuild-needed" => "建议重建",
+        _ => "执行同步",
+    }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+
+    let bytes = bytes as f64;
+    if bytes >= GB {
+        format!("{:.1}GB", bytes / GB)
+    } else if bytes >= MB {
+        format!("{:.1}MB", bytes / MB)
+    } else if bytes >= KB {
+        format!("{:.1}KB", bytes / KB)
+    } else {
+        format!("{}B", bytes as u64)
+    }
 }
 
 pub fn status(store: &Store) -> Result<Rendered> {

@@ -219,6 +219,8 @@ codex-threads --json events search "agent" --event-type agent_reasoning --until 
 - 默认命令行输出会在 `sync`、`search`、`read` 等操作末尾追加 `耗时: ...`
 - 耗时会按时长动态显示为 `ms` 或 `s`
 - `--json` 模式不输出格式化耗时文本，只提供稳定字段 `duration_ms`
+- `sync` 在真正执行前会先输出一段同步预检摘要，说明本次检测到的文件规模、变更数量和建议动作
+- `--json sync` 会额外返回 `preflight` 字段，方便 agent 先理解这次同步是应当跳过，还是值得继续执行
 
 ## 设计要点
 

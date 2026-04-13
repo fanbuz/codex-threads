@@ -9,7 +9,7 @@ use walkdir::WalkDir;
 
 use crate::parser::ParsedSession;
 
-use super::super::types::{SyncFailure, SyncReport, SyncStats};
+use super::super::types::{SyncFailure, SyncPreflight, SyncReport, SyncStats};
 use super::Store;
 
 #[derive(Debug, Clone)]
@@ -20,6 +20,65 @@ struct FileState {
 }
 
 impl Store {
+    pub fn preflight_sync(&self, sessions_dir: &Path) -> Result<SyncPreflight> {
+        if !sessions_dir.exists() {
+            bail!("会话目录不存在: {}", sessions_dir.display());
+        }
+
+        let existing = self.load_existing_files()?;
+        let mut total_files = 0usize;
+        let mut changed_files = 0usize;
+        let mut total_bytes = 0u64;
+        let mut largest_file_bytes = 0u64;
+
+        for entry in WalkDir::new(sessions_dir)
+            .into_iter()
+            .filter_map(Result::ok)
+        {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            if entry.path().extension().and_then(|value| value.to_str()) != Some("jsonl") {
+                continue;
+            }
+
+            total_files += 1;
+            let path = entry.path().to_path_buf();
+            let path_string = path.to_string_lossy().into_owned();
+            let metadata = fs::metadata(&path)
+                .with_context(|| format!("failed to stat {}", path.display()))?;
+            let modified_at = metadata
+                .modified()
+                .and_then(|value| system_time_to_nanos(value).map_err(std::io::Error::other))
+                .with_context(|| format!("failed to read mtime {}", path.display()))?;
+            let size = metadata.len();
+            total_bytes += size;
+            largest_file_bytes = largest_file_bytes.max(size);
+
+            let is_unchanged = existing
+                .get(&path_string)
+                .map(|state| state.modified_at == modified_at && state.size == size as i64)
+                .unwrap_or(false);
+            if !is_unchanged {
+                changed_files += 1;
+            }
+        }
+
+        let unchanged_files = total_files.saturating_sub(changed_files);
+        let (recommended_action, reason) =
+            classify_preflight(total_files, changed_files, total_bytes, largest_file_bytes);
+
+        Ok(SyncPreflight {
+            total_files,
+            changed_files,
+            unchanged_files,
+            total_bytes,
+            largest_file_bytes,
+            recommended_action,
+            reason,
+        })
+    }
+
     pub fn sync_sessions(&mut self, sessions_dir: &Path) -> Result<SyncReport> {
         if !sessions_dir.exists() {
             bail!("会话目录不存在: {}", sessions_dir.display());
@@ -157,6 +216,32 @@ impl Store {
             partial: !failures.is_empty(),
             stats,
             failures,
+        })
+    }
+
+    pub fn skip_sync_report(
+        &self,
+        sessions_dir: &Path,
+        preflight: &SyncPreflight,
+    ) -> Result<SyncReport> {
+        if !sessions_dir.exists() {
+            bail!("会话目录不存在: {}", sessions_dir.display());
+        }
+
+        let counts = self.count_totals()?;
+        Ok(SyncReport {
+            partial: false,
+            stats: SyncStats {
+                scanned_files: preflight.total_files,
+                indexed_files: 0,
+                skipped_files: preflight.total_files,
+                failed_files: 0,
+                removed_files: 0,
+                threads: counts.0,
+                messages: counts.1,
+                events: counts.2,
+            },
+            failures: Vec::new(),
         })
     }
 
@@ -380,4 +465,31 @@ fn system_time_to_nanos(time: SystemTime) -> Result<i64> {
         .duration_since(UNIX_EPOCH)
         .map_err(|error| anyhow!("invalid system time: {}", error))?;
     Ok(duration.as_nanos() as i64)
+}
+
+fn classify_preflight(
+    total_files: usize,
+    changed_files: usize,
+    total_bytes: u64,
+    largest_file_bytes: u64,
+) -> (String, String) {
+    if total_files == 0 {
+        return ("skip".to_string(), "未发现可同步的会话文件".to_string());
+    }
+
+    if changed_files == 0 {
+        return ("skip".to_string(), "未检测到发生变化的会话文件".to_string());
+    }
+
+    if total_bytes >= 1_000_000_000 || largest_file_bytes >= 100_000_000 || changed_files >= 100 {
+        return (
+            "heavy-sync".to_string(),
+            "检测到大体量或高变更同步，建议关注本次同步成本".to_string(),
+        );
+    }
+
+    (
+        "sync".to_string(),
+        "检测到有变更文件，建议执行同步".to_string(),
+    )
 }

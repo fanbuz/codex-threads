@@ -31,6 +31,9 @@ fn sync_reports_indexed_files() {
     assert_eq!(json["command"], "sync");
     assert!(json.get("duration_ms").and_then(Value::as_u64).is_some());
     assert!(json.get("duration_display").is_none());
+    assert_eq!(json["preflight"]["total_files"], 2);
+    assert_eq!(json["preflight"]["changed_files"], 2);
+    assert_eq!(json["preflight"]["recommended_action"], "sync");
     assert_eq!(json["stats"]["scanned_files"], 2);
     assert_eq!(json["stats"]["indexed_files"], 2);
     assert_eq!(json["stats"]["threads"], 2);
@@ -55,6 +58,8 @@ fn sync_text_output_uses_plain_lines() {
         ])
         .assert()
         .success()
+        .stdout(predicates::str::contains("同步预检"))
+        .stdout(predicates::str::contains("推荐动作: 执行同步"))
         .stdout(predicates::str::contains("同步完成"))
         .stdout(predicates::str::contains("会话目录:"))
         .stdout(predicates::str::contains("索引目录:"))
@@ -100,6 +105,8 @@ fn sync_is_incremental_for_unchanged_and_changed_files() {
         .clone();
 
     let second_json: Value = serde_json::from_slice(&second).unwrap();
+    assert_eq!(second_json["preflight"]["recommended_action"], "skip");
+    assert_eq!(second_json["preflight"]["changed_files"], 0);
     assert_eq!(second_json["stats"]["indexed_files"], 0);
     assert_eq!(second_json["stats"]["skipped_files"], 2);
 
@@ -122,6 +129,8 @@ fn sync_is_incremental_for_unchanged_and_changed_files() {
         .clone();
 
     let third_json: Value = serde_json::from_slice(&third).unwrap();
+    assert_eq!(third_json["preflight"]["recommended_action"], "sync");
+    assert_eq!(third_json["preflight"]["changed_files"], 1);
     assert_eq!(third_json["stats"]["indexed_files"], 1);
     assert_eq!(third_json["stats"]["skipped_files"], 1);
     assert_eq!(third_json["stats"]["messages"], 7);

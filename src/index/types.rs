@@ -28,6 +28,17 @@ pub struct SyncReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct SyncPreflight {
+    pub total_files: usize,
+    pub changed_files: usize,
+    pub unchanged_files: usize,
+    pub total_bytes: u64,
+    pub largest_file_bytes: u64,
+    pub recommended_action: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct StatusSummary {
     pub index_path: String,
     pub fts_available: bool,
