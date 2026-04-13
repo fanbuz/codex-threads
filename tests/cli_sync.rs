@@ -3,6 +3,8 @@ mod common;
 use assert_cmd::Command;
 use serde_json::Value;
 use tempfile::tempdir;
+use time::format_description::well_known::Rfc3339;
+use time::{Duration, OffsetDateTime};
 
 #[test]
 fn sync_reports_indexed_files() {
@@ -463,4 +465,70 @@ fn scoped_sync_does_not_prune_out_of_scope_history() {
     assert_eq!(json["scope"]["path"], "session-beta");
     assert_eq!(json["stats"]["removed_files"], 0);
     assert_eq!(json["stats"]["threads"], 2);
+}
+
+#[test]
+fn sync_fails_when_active_lock_exists() {
+    let tmp = tempdir().unwrap();
+    let _ = common::write_fixture_sessions(tmp.path());
+    let index_dir = tmp.path().join("index");
+    let sessions_dir = tmp.path().join("sessions");
+    let now = OffsetDateTime::now_utc().format(&Rfc3339).unwrap();
+    common::write_sync_lock(&index_dir, 4242, &now, &now);
+
+    let output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "sync",
+        ])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["ok"], false);
+    assert!(json["error"]
+        .as_str()
+        .unwrap()
+        .contains("已有 sync 正在运行"));
+}
+
+#[test]
+fn sync_recovers_stale_lock_and_runs_successfully() {
+    let tmp = tempdir().unwrap();
+    let _ = common::write_fixture_sessions(tmp.path());
+    let index_dir = tmp.path().join("index");
+    let sessions_dir = tmp.path().join("sessions");
+    let stale = (OffsetDateTime::now_utc() - Duration::hours(1))
+        .format(&Rfc3339)
+        .unwrap();
+    let lock_path = common::write_sync_lock(&index_dir, 4242, &stale, &stale);
+
+    let output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "sync",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["command"], "sync");
+    assert_eq!(json["stats"]["indexed_files"], 2);
+    assert!(!lock_path.exists());
 }

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -46,6 +48,29 @@ pub fn overwrite_with_invalid_json(path: &Path) {
         "{\"timestamp\":\"2026-04-12T10:00:00Z\",\"type\":\"session_meta\"\nnot-json\n",
     )
     .unwrap();
+}
+
+#[allow(dead_code)]
+pub fn write_sync_lock(
+    index_dir: &Path,
+    pid: u32,
+    started_at: &str,
+    heartbeat_at: &str,
+) -> PathBuf {
+    fs::create_dir_all(index_dir).unwrap();
+    let lock_path = index_dir.join("sync.lock.json");
+    fs::write(
+        &lock_path,
+        format!(
+            "{{\"pid\":{},\"command\":\"sync\",\"index_path\":\"{}\",\"started_at\":\"{}\",\"heartbeat_at\":\"{}\"}}",
+            pid,
+            index_dir.join("threads.sqlite3").to_string_lossy(),
+            started_at,
+            heartbeat_at
+        ),
+    )
+    .unwrap();
+    lock_path
 }
 
 fn alpha_session() -> String {

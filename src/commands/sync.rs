@@ -37,11 +37,13 @@ pub fn run(
     args: &SyncArgs,
 ) -> Result<Rendered> {
     let request = build_request(args);
-    let plan = store.preflight_sync(sessions_dir, &request)?;
+    let mut sync_lock = store.acquire_sync_lock()?;
+    sync_lock.heartbeat()?;
+    let plan = store.preflight_sync(sessions_dir, &request, Some(&mut sync_lock))?;
     let report = if plan.preflight.recommended_action == "skip" {
         store.skip_sync_report(sessions_dir, &plan.preflight)?
     } else {
-        store.sync_sessions(sessions_dir, &request)?
+        store.sync_sessions(sessions_dir, &request, Some(&mut sync_lock))?
     };
     let response = SyncResponse {
         command: "sync",
@@ -143,6 +145,14 @@ fn render_scope_recent(value: Option<usize>) -> String {
     }
 }
 
+fn render_lock_state(lock: &crate::index::SyncLockStatus) -> &'static str {
+    match lock.state.as_str() {
+        "running" => "运行中",
+        "stale" => "过期",
+        _ => "空闲",
+    }
+}
+
 fn format_bytes(bytes: u64) -> String {
     const KB: f64 = 1024.0;
     const MB: f64 = KB * 1024.0;
@@ -169,17 +179,30 @@ pub fn status(store: &Store) -> Result<Rendered> {
         status: status.clone(),
     };
 
-    let text = [
+    let mut lines = vec![
         "索引状态".to_string(),
         format!("CLI 版本: {}", response.cli_version),
         format!("索引文件: {}", status.index_path),
         format!("FTS5 可用: {}", status.fts_available),
+        format!("同步锁: {}", render_lock_state(&status.sync_lock)),
         format!("文件数: {}", status.files),
         format!("线程数: {}", status.threads),
         format!("消息数: {}", status.messages),
         format!("事件数: {}", status.events),
-    ]
-    .join("\n");
+    ];
+    if let Some(pid) = status.sync_lock.pid {
+        lines.push(format!("锁 PID: {}", pid));
+    }
+    if let Some(started_at) = &status.sync_lock.started_at {
+        lines.push(format!("开始时间: {}", started_at));
+    }
+    if let Some(heartbeat_at) = &status.sync_lock.heartbeat_at {
+        lines.push(format!("最近心跳: {}", heartbeat_at));
+    }
+    if let Some(reason) = &status.sync_lock.reason {
+        lines.push(format!("锁说明: {}", reason));
+    }
+    let text = lines.join("\n");
 
     Rendered::new(text, &response)
 }

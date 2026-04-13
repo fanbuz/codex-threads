@@ -1,3 +1,4 @@
+mod lock;
 mod read;
 mod search;
 mod sync;
@@ -39,6 +40,7 @@ impl Store {
         Ok(StatusSummary {
             index_path: self.index_path.to_string_lossy().into_owned(),
             fts_available: self.fts_available,
+            sync_lock: self.sync_lock_status()?,
             files,
             threads: counts.0,
             messages: counts.1,

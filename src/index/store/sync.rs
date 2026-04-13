@@ -15,6 +15,7 @@ use crate::parser::ParsedSession;
 use super::super::types::{
     SyncFailure, SyncPlan, SyncPreflight, SyncReport, SyncRequest, SyncScope, SyncStats,
 };
+use super::lock::SyncLockGuard;
 use super::Store;
 
 #[derive(Debug, Clone)]
@@ -34,9 +35,14 @@ struct CandidateFile {
 }
 
 impl Store {
-    pub fn preflight_sync(&self, sessions_dir: &Path, request: &SyncRequest) -> Result<SyncPlan> {
+    pub(crate) fn preflight_sync(
+        &self,
+        sessions_dir: &Path,
+        request: &SyncRequest,
+        lock: Option<&mut SyncLockGuard>,
+    ) -> Result<SyncPlan> {
         let existing = self.load_existing_files()?;
-        let (scope, candidates) = collect_candidate_files(sessions_dir, request)?;
+        let (scope, candidates) = collect_candidate_files(sessions_dir, request, lock)?;
         let mut total_files = 0usize;
         let mut changed_files = 0usize;
         let mut total_bytes = 0u64;
@@ -81,13 +87,14 @@ impl Store {
         })
     }
 
-    pub fn sync_sessions(
+    pub(crate) fn sync_sessions(
         &mut self,
         sessions_dir: &Path,
         request: &SyncRequest,
+        mut lock: Option<&mut SyncLockGuard>,
     ) -> Result<SyncReport> {
         let existing = self.load_existing_files()?;
-        let (_, candidates) = collect_candidate_files(sessions_dir, request)?;
+        let (_, candidates) = collect_candidate_files(sessions_dir, request, lock.as_deref_mut())?;
         let mut seen_paths = HashSet::new();
         let mut retained_session_ids = HashSet::new();
         let fts_available = self.fts_available;
@@ -105,7 +112,8 @@ impl Store {
 
         let tx = self.conn.transaction()?;
 
-        for candidate in candidates {
+        for (index, candidate) in candidates.into_iter().enumerate() {
+            heartbeat_if_needed(&mut lock, index)?;
             stats.scanned_files += 1;
             seen_paths.insert(candidate.path_string.clone());
 
@@ -242,6 +250,7 @@ impl Store {
 fn collect_candidate_files(
     sessions_dir: &Path,
     request: &SyncRequest,
+    mut lock: Option<&mut SyncLockGuard>,
 ) -> Result<(SyncScope, Vec<CandidateFile>)> {
     if !sessions_dir.exists() {
         bail!("会话目录不存在: {}", sessions_dir.display());
@@ -261,10 +270,12 @@ fn collect_candidate_files(
     let path_filter = request.path.as_ref().map(|value| value.to_lowercase());
     let mut candidates = Vec::new();
 
-    for entry in WalkDir::new(sessions_dir)
+    for (index, entry) in WalkDir::new(sessions_dir)
         .into_iter()
         .filter_map(Result::ok)
+        .enumerate()
     {
+        heartbeat_if_needed(&mut lock, index)?;
         if !entry.file_type().is_file() {
             continue;
         }
@@ -319,6 +330,16 @@ fn collect_candidate_files(
         },
         candidates,
     ))
+}
+
+fn heartbeat_if_needed(lock: &mut Option<&mut SyncLockGuard>, index: usize) -> Result<()> {
+    if index % 32 != 0 {
+        return Ok(());
+    }
+    if let Some(lock) = lock.as_deref_mut() {
+        lock.heartbeat()?;
+    }
+    Ok(())
 }
 
 fn normalize_scope_time(value: Option<&str>, flag: &str) -> Result<Option<String>> {

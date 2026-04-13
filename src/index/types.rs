@@ -38,6 +38,20 @@ pub struct SyncPreflight {
     pub reason: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncLockStatus {
+    pub state: String,
+    pub lock_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub heartbeat_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SyncRequest {
     pub since: Option<String>,
@@ -75,6 +89,7 @@ pub struct SyncPlan {
 pub struct StatusSummary {
     pub index_path: String,
     pub fts_available: bool,
+    pub sync_lock: SyncLockStatus,
     pub files: usize,
     pub threads: usize,
     pub messages: usize,
