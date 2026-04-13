@@ -227,6 +227,20 @@ codex-threads --json events search "agent" --event-type agent_reasoning --until 
 - FTS 优先：若 SQLite 支持 FTS5 则用全文检索，否则自动回退到 `LIKE`
 - 线程聚合搜索：按标题、路径、消息内容和事件摘要搜索整条线程
 
+## 代码结构
+
+- `src/commands/`：命令层，负责把 CLI 输入转成具体的搜索、读取和同步调用
+- `src/index/types.rs`：索引域的公共数据结构，集中放同步统计、读取结果和搜索结果模型
+- `src/index/store/`：索引存储与核心流程
+  - `mod.rs`：`Store` 入口、状态汇总与基础统计
+  - `sync.rs`：同步扫描、会话重建与索引写入
+  - `search.rs`：线程、消息、事件三类搜索与过滤逻辑
+  - `read.rs`：线程、消息、事件读取逻辑
+- `src/parser/`：把 Codex 会话 `jsonl` 解析成线程、消息和事件模型
+- `src/output.rs`：文本输出、JSON 响应和耗时展示
+
+这套结构的目标是让同步、搜索、读取、解析和输出各自有稳定落点，避免继续把复杂度堆回单个超大文件。
+
 ## 适合的工作流
 
 1. 先运行 `codex-threads --json sync`
