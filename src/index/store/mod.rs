@@ -1,3 +1,4 @@
+mod doctor;
 mod lock;
 mod read;
 mod refresh;

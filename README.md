@@ -22,6 +22,7 @@
 ## Features
 
 - 增量扫描 `~/.codex/sessions`
+- 索引健康检查与安全修复入口
 - 线程、消息、事件三类搜索与读取接口
 - 默认提供便于直接阅读的命令行输出，以及 `--json` 结构化输出
 - 除 `status` / `help` / `--version` 外，命令会附带耗时统计
@@ -167,6 +168,7 @@ cargo install --path . --force
 
 ```bash
 codex-threads --json sync
+codex-threads --json doctor
 codex-threads --json messages search "build a CLI" --limit 10
 codex-threads --json events search "agent_reasoning" --limit 10
 codex-threads --json threads read <session-id> --limit 20
@@ -183,6 +185,8 @@ codex-threads --json sync --recent 20
 codex-threads --json sync --budget-files 200
 codex-threads --json sync --cooldown 45m
 codex-threads sync --force
+codex-threads doctor
+codex-threads doctor --repair
 codex-threads messages search "build a CLI" --limit 20
 codex-threads events search "agent_reasoning" --limit 20
 codex-threads --json threads search "websocket reconnect"
@@ -207,6 +211,10 @@ codex-threads status
 - `--budget-files N` 单次最多处理 N 个需要刷新的会话文件；超出部分会保存为本地续跑状态，等待下次同参数 `sync` 继续处理
 - `--cooldown INTERVAL` 同范围同步的冷却时间，默认 `30m`，支持 `s` / `m` / `h` 单位
 - `--force` 忽略冷却时间，立即执行本次同步
+
+`doctor` 参数：
+
+- `--repair` 清理可安全修复的本地状态文件问题，例如过期同步锁、损坏的续跑状态和损坏的冷却状态
 
 搜索过滤参数：
 
@@ -246,6 +254,8 @@ codex-threads --json events search "agent" --event-type agent_reasoning --until 
 - 同一个索引目录同一时间只允许一个 `sync` 写任务运行；如果命中活跃锁，新的 `sync` 会直接退出并提示已有同步正在进行
 - `sync` 会自动接管超过心跳窗口的过期锁，避免异常退出后的锁文件长期阻塞后续同步
 - `status` 会额外展示当前同步锁状态；`--json status` 则会返回 `status.sync_lock` 结构，方便 agent 判断索引目录是否正被同步占用
+- `doctor` 会汇总当前索引健康状态，输出问题列表、修复记录和操作建议；`--json doctor` 会返回稳定的 `doctor` 结构，方便 agent 自动消费
+- `doctor --repair` 只处理低风险、本地可恢复的问题；像线程计数漂移这类需要重建索引的问题，当前版本会明确提示重新同步而不会自动改写主数据
 - 范围化 `sync` 只更新命中范围，不会顺带清理范围外历史；如果要做完整清理，请直接运行不带范围参数的 `sync`
 - 当 `--budget-files` 命中预算上限时，本次 `sync` 会返回 `partial=true` 和 `resume.state=saved`，并在索引目录旁写入 `sync.resume.json`
 - 后续只要再次用相同参数执行 `sync`，CLI 会自动从 `sync.resume.json` 继续，直到 `resume.state=completed` 后清理这个本地状态文件

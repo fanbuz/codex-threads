@@ -42,6 +42,8 @@ pub enum Command {
     Sync(SyncArgs),
     #[command(about = "查看索引状态和统计信息")]
     Status,
+    #[command(about = "检查索引健康状态，并可选择修复安全问题")]
+    Doctor(DoctorArgs),
     #[command(about = "搜索和读取线程")]
     Threads {
         #[command(subcommand)]
@@ -89,6 +91,12 @@ pub struct SyncArgs {
 
     #[arg(long, help = "忽略冷却时间，强制执行本次同步")]
     pub force: bool,
+}
+
+#[derive(Debug, Args, Clone, Default)]
+pub struct DoctorArgs {
+    #[arg(long, help = "清理可安全修复的本地状态文件问题")]
+    pub repair: bool,
 }
 
 #[derive(Debug, Subcommand)]

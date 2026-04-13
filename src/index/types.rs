@@ -53,6 +53,32 @@ pub struct SyncCooldownPolicy {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct DoctorIssue {
+    pub code: String,
+    pub summary: String,
+    pub repairable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DoctorRepairAction {
+    pub code: String,
+    pub summary: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DoctorReport {
+    pub status: String,
+    pub recommendation: String,
+    pub issues: Vec<DoctorIssue>,
+    pub repaired_actions: Vec<DoctorRepairAction>,
+    pub status_summary: StatusSummary,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct SyncPreflight {
     pub total_files: usize,
     pub changed_files: usize,

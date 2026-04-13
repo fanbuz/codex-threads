@@ -8,8 +8,9 @@ pub(crate) use progress::{SyncProgressEvent, SyncProgressObserver};
 pub use search_meta::{SearchBackend, SearchExplain, SearchMeta, SearchQueryMode, SearchReport};
 pub use store::Store;
 pub use types::{
-    EventRecord, EventSearchFilters, EventSearchHit, MessageRecord, MessageSearchFilters,
-    MessageSearchHit, StatusSummary, SyncCooldown, SyncCooldownPolicy, SyncFailure, SyncLockStatus,
-    SyncPlan, SyncPreflight, SyncReport, SyncRequest, SyncResume, SyncScope, SyncStats, ThreadRead,
-    ThreadRecord, ThreadSearchFilters, ThreadSearchHit,
+    DoctorIssue, DoctorRepairAction, DoctorReport, EventRecord, EventSearchFilters, EventSearchHit,
+    MessageRecord, MessageSearchFilters, MessageSearchHit, StatusSummary, SyncCooldown,
+    SyncCooldownPolicy, SyncFailure, SyncLockStatus, SyncPlan, SyncPreflight, SyncReport,
+    SyncRequest, SyncResume, SyncScope, SyncStats, ThreadRead, ThreadRecord, ThreadSearchFilters,
+    ThreadSearchHit,
 };

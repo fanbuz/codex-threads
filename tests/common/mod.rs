@@ -108,6 +108,22 @@ pub fn write_sync_lock(
     lock_path
 }
 
+#[allow(dead_code)]
+pub fn write_invalid_resume_state(index_dir: &Path) -> PathBuf {
+    fs::create_dir_all(index_dir).unwrap();
+    let path = index_dir.join("sync.resume.json");
+    fs::write(&path, "{not-json").unwrap();
+    path
+}
+
+#[allow(dead_code)]
+pub fn write_invalid_refresh_state(index_dir: &Path) -> PathBuf {
+    fs::create_dir_all(index_dir).unwrap();
+    let path = index_dir.join("sync.refresh.json");
+    fs::write(&path, "{not-json").unwrap();
+    path
+}
+
 fn alpha_session() -> String {
     [
         r#"{"timestamp":"2026-04-12T10:00:00Z","type":"session_meta","payload":{"id":"session-alpha","timestamp":"2026-04-12T10:00:00Z","cwd":"/workspace/alpha-repo","originator":"codex_cli_rs","cli_version":"0.53.0"}}"#,

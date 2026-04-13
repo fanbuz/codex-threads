@@ -12,6 +12,9 @@ fn top_level_help_shows_command_descriptions() {
         .stdout(predicate::str::contains(
             "sync      增量扫描会话文件并更新索引",
         ))
+        .stdout(predicate::str::contains(
+            "doctor    检查索引健康状态，并可选择修复安全问题",
+        ))
         .stdout(predicate::str::contains("threads   搜索和读取线程"))
         .stdout(predicate::str::contains("messages  搜索和读取消息"))
         .stdout(predicate::str::contains("events    搜索和读取事件记录"));
@@ -98,4 +101,14 @@ fn sync_help_shows_scope_options() {
         .stdout(predicate::str::contains("--budget-files <BUDGET_FILES>"))
         .stdout(predicate::str::contains("--cooldown <COOLDOWN>"))
         .stdout(predicate::str::contains("--force"));
+}
+
+#[test]
+fn doctor_help_shows_repair_option() {
+    Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args(["doctor", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--repair"));
 }

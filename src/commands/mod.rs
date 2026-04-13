@@ -1,3 +1,4 @@
+mod doctor;
 mod read;
 mod search;
 mod sync;
@@ -21,6 +22,7 @@ pub fn run(cli: Cli) -> Result<Rendered> {
             run_with_timing(|| sync::run(&mut store, &sessions_dir, &index_dir, &args))
         }
         Command::Status => sync::status(&store),
+        Command::Doctor(args) => run_with_timing(|| doctor::run(&store, &args)),
         Command::Threads { command } => match command {
             ThreadsCommand::Search(args) => run_with_timing(|| search::threads(&store, &args)),
             ThreadsCommand::Read(args) => {
