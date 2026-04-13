@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -10,7 +12,7 @@ use time::macros::format_description;
 use time::{OffsetDateTime, PrimitiveDateTime};
 use walkdir::WalkDir;
 
-use crate::parser::ParsedSession;
+use crate::parser::{ParsedSession, ParsedSessionTail};
 
 use super::super::progress::{SyncProgressEvent, SyncProgressObserver};
 use super::super::types::{
@@ -27,6 +29,7 @@ struct FileState {
     session_id: Option<String>,
     modified_at: i64,
     size: i64,
+    tail_record: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -56,6 +59,24 @@ struct PreparedSyncRun {
 struct SyncCooldownDecision {
     cooldown: SyncCooldown,
     should_skip: bool,
+}
+
+#[derive(Debug, Clone)]
+struct ThreadState {
+    row_id: i64,
+    session_id: String,
+    title: String,
+    cwd: Option<String>,
+    ended_at: Option<String>,
+    message_count: usize,
+    event_count: usize,
+    aggregate_text: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CandidateSyncMode {
+    Appended,
+    Rebuilt { fallback: bool },
 }
 
 impl Store {
@@ -217,6 +238,9 @@ impl Store {
         let mut stats = SyncStats {
             scanned_files: prepared.unchanged_paths.len(),
             indexed_files: 0,
+            appended_files: 0,
+            rebuilt_files: 0,
+            fallback_rebuilt_files: 0,
             skipped_files: prepared.unchanged_paths.len(),
             failed_files: 0,
             removed_files: 0,
@@ -281,8 +305,13 @@ impl Store {
                 },
             );
 
-            let parsed = match crate::parser::parse_session_file(&candidate.path) {
-                Ok(parsed) => parsed,
+            let sync_mode = match sync_candidate(
+                &tx,
+                fts_available,
+                candidate,
+                existing.get(&candidate.path_string),
+            ) {
+                Ok(mode) => mode,
                 Err(error) => {
                     stats.failed_files += 1;
                     retain_previous_session_id(
@@ -307,20 +336,28 @@ impl Store {
                     continue;
                 }
             };
-            retained_session_ids.insert(parsed.session_id.clone());
-            let old_session_id = existing
-                .get(&candidate.path_string)
-                .and_then(|state| state.session_id.clone());
-            replace_session(
-                &tx,
-                fts_available,
-                &candidate.path,
-                candidate.modified_at,
-                candidate.size,
-                old_session_id.as_deref(),
-                &parsed,
-            )?;
             stats.indexed_files += 1;
+            match sync_mode {
+                CandidateSyncMode::Appended => {
+                    stats.appended_files += 1;
+                    if let Some(session_id) = existing
+                        .get(&candidate.path_string)
+                        .and_then(|state| state.session_id.clone())
+                    {
+                        retained_session_ids.insert(session_id);
+                    }
+                }
+                CandidateSyncMode::Rebuilt { fallback } => {
+                    stats.rebuilt_files += 1;
+                    if fallback {
+                        stats.fallback_rebuilt_files += 1;
+                    }
+                    if let Some(session_id) = load_session_id_by_path(&tx, &candidate.path_string)?
+                    {
+                        retained_session_ids.insert(session_id);
+                    }
+                }
+            }
             emit_progress(
                 progress,
                 SyncProgressEvent::IndexProgress {
@@ -394,6 +431,9 @@ impl Store {
             stats: SyncStats {
                 scanned_files: preflight.total_files,
                 indexed_files: 0,
+                appended_files: 0,
+                rebuilt_files: 0,
+                fallback_rebuilt_files: 0,
                 skipped_files: preflight.total_files,
                 failed_files: 0,
                 removed_files: 0,
@@ -475,6 +515,9 @@ impl Store {
             stats: SyncStats {
                 scanned_files: 0,
                 indexed_files: 0,
+                appended_files: 0,
+                rebuilt_files: 0,
+                fallback_rebuilt_files: 0,
                 skipped_files: 0,
                 failed_files: 0,
                 removed_files: 0,
@@ -580,7 +623,7 @@ impl Store {
     fn load_existing_files(&self) -> Result<HashMap<String, FileState>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT path, session_id, modified_at, size FROM files")?;
+            .prepare("SELECT path, session_id, modified_at, size, tail_record FROM files")?;
         let rows = stmt.query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
@@ -588,6 +631,7 @@ impl Store {
                     session_id: row.get(1)?,
                     modified_at: row.get(2)?,
                     size: row.get(3)?,
+                    tail_record: row.get(4)?,
                 },
             ))
         })?;
@@ -988,11 +1032,233 @@ fn replace_session(
     }
 
     tx.execute(
-        "INSERT OR REPLACE INTO files(path, session_id, modified_at, size, synced_at) VALUES (?1, ?2, ?3, ?4, datetime('now'))",
-        params![path_string, parsed.session_id, modified_at, size],
+        "INSERT OR REPLACE INTO files(path, session_id, modified_at, size, synced_at, tail_record) VALUES (?1, ?2, ?3, ?4, datetime('now'), ?5)",
+        params![
+            path_string,
+            parsed.session_id,
+            modified_at,
+            size,
+            parsed.tail_record
+        ],
     )?;
 
     Ok(())
+}
+
+fn sync_candidate(
+    tx: &Transaction<'_>,
+    fts_available: bool,
+    candidate: &CandidateFile,
+    existing: Option<&FileState>,
+) -> Result<CandidateSyncMode> {
+    if let Some(mode) = try_append_session(tx, fts_available, candidate, existing)? {
+        return Ok(mode);
+    }
+
+    let parsed = crate::parser::parse_session_file(&candidate.path)?;
+    let old_session_id = existing.and_then(|state| state.session_id.as_deref());
+    replace_session(
+        tx,
+        fts_available,
+        &candidate.path,
+        candidate.modified_at,
+        candidate.size,
+        old_session_id,
+        &parsed,
+    )?;
+    Ok(CandidateSyncMode::Rebuilt {
+        fallback: existing.is_some(),
+    })
+}
+
+fn try_append_session(
+    tx: &Transaction<'_>,
+    fts_available: bool,
+    candidate: &CandidateFile,
+    existing: Option<&FileState>,
+) -> Result<Option<CandidateSyncMode>> {
+    let Some(existing) = existing else {
+        return Ok(None);
+    };
+    let Some(session_id) = existing.session_id.as_deref() else {
+        return Ok(None);
+    };
+    let Some(stored_tail_record) = existing.tail_record.as_deref() else {
+        return Ok(None);
+    };
+    if candidate.size <= existing.size {
+        return Ok(None);
+    }
+
+    // Compare the record at the old EOF before trusting an append-only fast path.
+    let Some(prefix_tail_record) =
+        read_tail_record_before_offset(&candidate.path, existing.size as u64)?
+    else {
+        return Ok(None);
+    };
+    if prefix_tail_record != stored_tail_record {
+        return Ok(None);
+    }
+
+    let Some(thread) = load_thread_state(tx, session_id)? else {
+        return Ok(None);
+    };
+    let parsed_tail = crate::parser::parse_session_tail(&candidate.path, existing.size as u64)?;
+    if let Some(delta_session_id) = parsed_tail.session_id.as_deref() {
+        if delta_session_id != thread.session_id {
+            return Ok(None);
+        }
+    }
+    if let Some(delta_cwd) = parsed_tail.cwd.as_deref() {
+        if thread.cwd.as_deref() != Some(delta_cwd) {
+            return Ok(None);
+        }
+    }
+
+    append_session_tail(
+        tx,
+        fts_available,
+        candidate,
+        existing,
+        &thread,
+        &parsed_tail,
+    )?;
+    Ok(Some(CandidateSyncMode::Appended))
+}
+
+fn append_session_tail(
+    tx: &Transaction<'_>,
+    fts_available: bool,
+    candidate: &CandidateFile,
+    existing: &FileState,
+    thread: &ThreadState,
+    parsed_tail: &ParsedSessionTail,
+) -> Result<()> {
+    let next_message_idx = thread.message_count as i64;
+    for (offset, message) in parsed_tail.messages.iter().enumerate() {
+        tx.execute(
+            "INSERT INTO messages(session_id, idx, timestamp, role, text, raw_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                thread.session_id,
+                next_message_idx + offset as i64,
+                message.timestamp,
+                message.role,
+                message.text,
+                message.raw_json,
+            ],
+        )?;
+        let message_row_id = tx.last_insert_rowid();
+        if fts_available {
+            tx.execute(
+                "INSERT INTO messages_fts(rowid, session_id, role, text) VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    message_row_id,
+                    thread.session_id,
+                    message.role,
+                    message.text
+                ],
+            )?;
+        }
+    }
+
+    let next_event_idx = thread.event_count as i64;
+    for (offset, event) in parsed_tail.events.iter().enumerate() {
+        tx.execute(
+            "INSERT INTO events(session_id, idx, timestamp, event_type, summary, raw_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                thread.session_id,
+                next_event_idx + offset as i64,
+                event.timestamp,
+                event.event_type,
+                event.summary,
+                event.raw_json,
+            ],
+        )?;
+        let event_row_id = tx.last_insert_rowid();
+        if fts_available {
+            tx.execute(
+                "INSERT INTO events_fts(rowid, session_id, event_type, summary) VALUES (?1, ?2, ?3, ?4)",
+                params![event_row_id, thread.session_id, event.event_type, event.summary],
+            )?;
+        }
+    }
+
+    let merged_aggregate_text =
+        merge_aggregate_text(&thread.aggregate_text, &parsed_tail.aggregate_text);
+    let ended_at = parsed_tail
+        .ended_at
+        .clone()
+        .or_else(|| thread.ended_at.clone());
+    tx.execute(
+        "UPDATE threads SET ended_at = ?2, message_count = ?3, event_count = ?4, aggregate_text = ?5 WHERE session_id = ?1",
+        params![
+            thread.session_id,
+            ended_at,
+            (thread.message_count + parsed_tail.messages.len()) as i64,
+            (thread.event_count + parsed_tail.events.len()) as i64,
+            merged_aggregate_text,
+        ],
+    )?;
+
+    if fts_available {
+        tx.execute(
+            "UPDATE threads_fts SET session_id = ?2, title = ?3, cwd = ?4, path = ?5, aggregate_text = ?6 WHERE rowid = ?1",
+            params![
+                thread.row_id,
+                thread.session_id,
+                thread.title,
+                thread.cwd,
+                candidate.path_string,
+                merged_aggregate_text,
+            ],
+        )?;
+    }
+
+    tx.execute(
+        "UPDATE files SET modified_at = ?2, size = ?3, synced_at = datetime('now'), tail_record = ?4 WHERE path = ?1",
+        params![
+            candidate.path_string,
+            candidate.modified_at,
+            candidate.size,
+            parsed_tail
+                .tail_record
+                .clone()
+                .or_else(|| existing.tail_record.clone()),
+        ],
+    )?;
+
+    Ok(())
+}
+
+fn load_thread_state(tx: &Transaction<'_>, session_id: &str) -> Result<Option<ThreadState>> {
+    Ok(tx
+        .query_row(
+        "SELECT id, session_id, title, cwd, ended_at, message_count, event_count, aggregate_text FROM threads WHERE session_id = ?1",
+        params![session_id],
+        |row| {
+            Ok(ThreadState {
+                row_id: row.get(0)?,
+                session_id: row.get(1)?,
+                title: row.get(2)?,
+                cwd: row.get(3)?,
+                ended_at: row.get(4)?,
+                message_count: row.get::<_, i64>(5)? as usize,
+                event_count: row.get::<_, i64>(6)? as usize,
+                aggregate_text: row.get(7)?,
+            })
+        },
+    )
+    .optional()?)
+}
+
+fn load_session_id_by_path(tx: &Transaction<'_>, path: &str) -> Result<Option<String>> {
+    Ok(tx
+        .query_row(
+            "SELECT session_id FROM threads WHERE path = ?1",
+            params![path],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?)
 }
 
 fn retain_previous_session_id(
@@ -1060,6 +1326,74 @@ fn delete_session(tx: &Transaction<'_>, fts_available: bool, session_id: &str) -
         params![session_id],
     )?;
     Ok(())
+}
+
+fn read_tail_record_before_offset(path: &Path, offset: u64) -> Result<Option<String>> {
+    if offset == 0 {
+        return Ok(None);
+    }
+
+    // Walk backwards from the previous EOF so append-only validation stays cheap
+    // even when the original session file is already very large.
+    let mut file =
+        File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    let mut end = offset;
+    let mut buffer = Vec::new();
+
+    loop {
+        let chunk_size = end.min(4096) as usize;
+        let start = end.saturating_sub(chunk_size as u64);
+        let mut chunk = vec![0; chunk_size];
+        file.seek(SeekFrom::Start(start))
+            .with_context(|| format!("failed to seek {}", path.display()))?;
+        file.read_exact(&mut chunk)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+
+        let mut combined = chunk;
+        combined.extend_from_slice(&buffer);
+        buffer = combined;
+
+        let search_slice = if buffer.last() == Some(&b'\n') {
+            &buffer[..buffer.len().saturating_sub(1)]
+        } else {
+            &buffer[..]
+        };
+        if let Some(position) = search_slice.iter().rposition(|byte| *byte == b'\n') {
+            let line = decode_tail_record(&search_slice[position + 1..])?;
+            if !line.is_empty() {
+                return Ok(Some(line));
+            }
+        }
+
+        if start == 0 {
+            let line = decode_tail_record(search_slice)?;
+            if line.is_empty() {
+                return Ok(None);
+            }
+            return Ok(Some(line));
+        }
+        end = start;
+    }
+}
+
+fn decode_tail_record(bytes: &[u8]) -> Result<String> {
+    let line = std::str::from_utf8(bytes)
+        .with_context(|| "failed to decode session tail as utf-8".to_string())?
+        .trim_end_matches('\r')
+        .trim()
+        .to_string();
+    Ok(line)
+}
+
+fn merge_aggregate_text(existing: &str, delta: &str) -> String {
+    if delta.trim().is_empty() {
+        return existing.to_string();
+    }
+    normalize_whitespace(format!("{existing}\n{delta}"))
+}
+
+fn normalize_whitespace(text: String) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn system_time_to_nanos(time: SystemTime) -> Result<i64> {

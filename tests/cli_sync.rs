@@ -64,6 +64,9 @@ fn sync_text_output_uses_plain_lines() {
         .stdout(predicates::str::contains("同步预检"))
         .stdout(predicates::str::contains("同步冷却"))
         .stdout(predicates::str::contains("冷却时间: 30m"))
+        .stdout(predicates::str::contains("尾部追加:"))
+        .stdout(predicates::str::contains("整条重建:"))
+        .stdout(predicates::str::contains("回退重建:"))
         .stdout(predicates::str::contains("推荐动作: 执行同步"))
         .stdout(predicates::str::contains("同步完成"))
         .stdout(predicates::str::contains("会话目录:"))
@@ -142,6 +145,147 @@ fn sync_is_incremental_for_unchanged_and_changed_files() {
     assert_eq!(third_json["stats"]["indexed_files"], 1);
     assert_eq!(third_json["stats"]["skipped_files"], 1);
     assert_eq!(third_json["stats"]["messages"], 7);
+}
+
+#[test]
+fn sync_appends_new_tail_records_without_rebuilding_whole_session() {
+    let tmp = tempdir().unwrap();
+    let (alpha_path, _) = common::write_fixture_sessions(tmp.path());
+    let index_dir = tmp.path().join("index");
+    let sessions_dir = tmp.path().join("sessions");
+
+    Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "sync",
+        ])
+        .assert()
+        .success();
+
+    common::append_alpha_message(&alpha_path);
+
+    let output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "sync",
+            "--force",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["stats"]["indexed_files"], 1);
+    assert_eq!(json["stats"]["appended_files"], 1);
+    assert_eq!(json["stats"]["rebuilt_files"], 0);
+    assert_eq!(json["stats"]["fallback_rebuilt_files"], 0);
+    assert_eq!(json["stats"]["messages"], 7);
+}
+
+#[test]
+fn sync_falls_back_to_rebuild_when_session_prefix_changes() {
+    let tmp = tempdir().unwrap();
+    let (alpha_path, _) = common::write_fixture_sessions(tmp.path());
+    let index_dir = tmp.path().join("index");
+    let sessions_dir = tmp.path().join("sessions");
+
+    Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "sync",
+        ])
+        .assert()
+        .success();
+
+    common::rewrite_alpha_session_with_extra_message(&alpha_path);
+
+    let output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "sync",
+            "--force",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["stats"]["indexed_files"], 1);
+    assert_eq!(json["stats"]["appended_files"], 0);
+    assert_eq!(json["stats"]["rebuilt_files"], 1);
+    assert_eq!(json["stats"]["fallback_rebuilt_files"], 1);
+    assert_eq!(json["stats"]["messages"], 7);
+}
+
+#[test]
+fn sync_falls_back_to_rebuild_when_session_is_truncated() {
+    let tmp = tempdir().unwrap();
+    let (alpha_path, _) = common::write_fixture_sessions(tmp.path());
+    let index_dir = tmp.path().join("index");
+    let sessions_dir = tmp.path().join("sessions");
+
+    Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "sync",
+        ])
+        .assert()
+        .success();
+
+    common::truncate_alpha_session(&alpha_path);
+
+    let output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "sync",
+            "--force",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["stats"]["indexed_files"], 1);
+    assert_eq!(json["stats"]["appended_files"], 0);
+    assert_eq!(json["stats"]["rebuilt_files"], 1);
+    assert_eq!(json["stats"]["fallback_rebuilt_files"], 1);
+    assert_eq!(json["stats"]["messages"], 5);
 }
 
 #[test]

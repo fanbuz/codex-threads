@@ -53,6 +53,42 @@ pub fn overwrite_with_invalid_json(path: &Path) {
 }
 
 #[allow(dead_code)]
+pub fn rewrite_alpha_session_with_extra_message(path: &Path) {
+    fs::write(
+        path,
+        [
+            r#"{"timestamp":"2026-04-12T10:00:00Z","type":"session_meta","payload":{"id":"session-alpha","timestamp":"2026-04-12T10:00:00Z","cwd":"/workspace/alpha-repo","originator":"codex_cli_rs","cli_version":"0.53.0"}}"#,
+            r#"{"timestamp":"2026-04-12T10:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Please build a CLI for thread search"}]}}"#,
+            r#"{"timestamp":"2026-04-12T10:00:02Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I will rebuild this CLI with an append-aware sync path."}]}}"#,
+            r#"{"timestamp":"2026-04-12T10:00:02Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"The parser should avoid reprocessing unchanged prefixes."}]}}"#,
+            r#"{"timestamp":"2026-04-12T10:00:03Z","type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{\"command\":[\"rg\",\"append\"]}"}}"#,
+            r#"{"timestamp":"2026-04-12T10:00:04Z","type":"event_msg","payload":{"type":"user_message","message":"Please build a CLI for thread search","images":[]}}"#,
+            r#"{"timestamp":"2026-04-12T10:00:05Z","type":"event_msg","payload":{"type":"agent_reasoning","text":"Re-evaluating append-tail sync strategy"}}"#,
+            r#"{"timestamp":"2026-04-12T10:00:06Z","type":"turn_context","payload":{"cwd":"/workspace/alpha-repo","approval_policy":"on-request","model":"gpt-5-codex"}}"#,
+            r#"{"timestamp":"2026-04-12T10:00:07Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"This rewritten session should trigger a rebuild fallback."}]}}"#,
+        ]
+        .join("\n"),
+    )
+    .unwrap();
+}
+
+#[allow(dead_code)]
+pub fn truncate_alpha_session(path: &Path) {
+    fs::write(
+        path,
+        [
+            r#"{"timestamp":"2026-04-12T10:00:00Z","type":"session_meta","payload":{"id":"session-alpha","timestamp":"2026-04-12T10:00:00Z","cwd":"/workspace/alpha-repo","originator":"codex_cli_rs","cli_version":"0.53.0"}}"#,
+            r#"{"timestamp":"2026-04-12T10:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Please build a CLI for thread search"}]}}"#,
+            r#"{"timestamp":"2026-04-12T10:00:02Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I will build a CLI using Rust and SQLite."}]}}"#,
+            r#"{"timestamp":"2026-04-12T10:00:03Z","type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{\"command\":[\"rg\",\"CLI\"]}"}}"#,
+            r#"{"timestamp":"2026-04-12T10:00:04Z","type":"event_msg","payload":{"type":"user_message","message":"Please build a CLI for thread search","images":[]}}"#,
+        ]
+        .join("\n"),
+    )
+    .unwrap();
+}
+
+#[allow(dead_code)]
 pub fn write_sync_lock(
     index_dir: &Path,
     pid: u32,

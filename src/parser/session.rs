@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::{
     fs::File,
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Seek, SeekFrom},
 };
 
 use anyhow::{Context, Result};
@@ -13,7 +13,19 @@ pub struct ParsedSession {
     pub cwd: Option<String>,
     pub title: String,
     pub aggregate_text: String,
+    pub tail_record: Option<String>,
     pub started_at: Option<String>,
+    pub ended_at: Option<String>,
+    pub messages: Vec<ParsedMessage>,
+    pub events: Vec<ParsedEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedSessionTail {
+    pub session_id: Option<String>,
+    pub cwd: Option<String>,
+    pub aggregate_text: String,
+    pub tail_record: Option<String>,
     pub ended_at: Option<String>,
     pub messages: Vec<ParsedMessage>,
     pub events: Vec<ParsedEvent>,
@@ -38,20 +50,53 @@ pub struct ParsedEvent {
 pub fn parse_session_file(path: &Path) -> Result<ParsedSession> {
     let file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
     let reader = BufReader::new(file);
+    let accumulator = parse_reader(reader, path)?;
+    Ok(accumulator.into_session(path))
+}
 
-    let mut session_id = None;
-    let mut cwd = None;
-    let mut first_user_message = None;
-    let mut started_at = None;
-    let mut ended_at = None;
-    let mut messages = Vec::new();
-    let mut events = Vec::new();
+pub fn parse_session_tail(path: &Path, offset: u64) -> Result<ParsedSessionTail> {
+    let mut file =
+        File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    file.seek(SeekFrom::Start(offset))
+        .with_context(|| format!("failed to seek {}", path.display()))?;
+    let reader = BufReader::new(file);
+    let accumulator = parse_reader(reader, path)?;
+    Ok(accumulator.into_tail())
+}
+
+#[derive(Debug, Default)]
+struct SessionAccumulator {
+    session_id: Option<String>,
+    cwd: Option<String>,
+    first_user_message: Option<String>,
+    started_at: Option<String>,
+    ended_at: Option<String>,
+    tail_record: Option<String>,
+    messages: Vec<ParsedMessage>,
+    events: Vec<ParsedEvent>,
+}
+
+fn parse_reader<R>(reader: BufReader<R>, path: &Path) -> Result<SessionAccumulator>
+where
+    R: std::io::Read,
+{
+    let mut accumulator = SessionAccumulator::default();
 
     for line in reader.lines() {
         let line = line.with_context(|| format!("failed to read {}", path.display()))?;
+        accumulator.ingest_line(&line, path)?;
+    }
+
+    Ok(accumulator)
+}
+
+impl SessionAccumulator {
+    fn ingest_line(&mut self, line: &str, path: &Path) -> Result<()> {
         if line.trim().is_empty() {
-            continue;
+            return Ok(());
         }
+
+        self.tail_record = Some(line.to_string());
 
         let value: Value = serde_json::from_str(&line)
             .with_context(|| format!("invalid JSON in {}", path.display()))?;
@@ -61,10 +106,10 @@ pub fn parse_session_file(path: &Path) -> Result<ParsedSession> {
             .unwrap_or_default()
             .to_string();
         if !timestamp.is_empty() {
-            if started_at.is_none() {
-                started_at = Some(timestamp.clone());
+            if self.started_at.is_none() {
+                self.started_at = Some(timestamp.clone());
             }
-            ended_at = Some(timestamp.clone());
+            self.ended_at = Some(timestamp.clone());
         }
         let record_type = value
             .get("type")
@@ -74,11 +119,11 @@ pub fn parse_session_file(path: &Path) -> Result<ParsedSession> {
 
         match record_type {
             "session_meta" => {
-                session_id = payload
+                self.session_id = payload
                     .get("id")
                     .and_then(Value::as_str)
                     .map(ToOwned::to_owned);
-                cwd = payload
+                self.cwd = payload
                     .get("cwd")
                     .and_then(Value::as_str)
                     .map(ToOwned::to_owned);
@@ -96,10 +141,10 @@ pub fn parse_session_file(path: &Path) -> Result<ParsedSession> {
                         .to_string();
                     let text = extract_message_text(&payload);
                     if !text.is_empty() {
-                        if role == "user" && first_user_message.is_none() {
-                            first_user_message = Some(text.clone());
+                        if role == "user" && self.first_user_message.is_none() {
+                            self.first_user_message = Some(text.clone());
                         }
-                        messages.push(ParsedMessage {
+                        self.messages.push(ParsedMessage {
                             timestamp,
                             role,
                             text,
@@ -113,7 +158,7 @@ pub fn parse_session_file(path: &Path) -> Result<ParsedSession> {
                         payload_type.to_string()
                     };
                     let summary = summarize_response_item(&payload);
-                    events.push(ParsedEvent {
+                    self.events.push(ParsedEvent {
                         timestamp,
                         event_type,
                         summary: trim_for_storage(&summary, 1000),
@@ -128,7 +173,7 @@ pub fn parse_session_file(path: &Path) -> Result<ParsedSession> {
                     .unwrap_or("event_msg")
                     .to_string();
                 let summary = summarize_event_payload(&payload);
-                events.push(ParsedEvent {
+                self.events.push(ParsedEvent {
                     timestamp,
                     event_type,
                     summary: trim_for_storage(&summary, 1000),
@@ -137,7 +182,7 @@ pub fn parse_session_file(path: &Path) -> Result<ParsedSession> {
             }
             "turn_context" => {
                 let summary = summarize_turn_context(&payload);
-                events.push(ParsedEvent {
+                self.events.push(ParsedEvent {
                     timestamp,
                     event_type: "turn_context".to_string(),
                     summary: trim_for_storage(&summary, 1000),
@@ -145,7 +190,7 @@ pub fn parse_session_file(path: &Path) -> Result<ParsedSession> {
                 });
             }
             other => {
-                events.push(ParsedEvent {
+                self.events.push(ParsedEvent {
                     timestamp,
                     event_type: other.to_string(),
                     summary: trim_for_storage(&compact_json(&payload), 1000),
@@ -153,22 +198,44 @@ pub fn parse_session_file(path: &Path) -> Result<ParsedSession> {
                 });
             }
         }
+
+        Ok(())
     }
 
-    let session_id = session_id.unwrap_or_else(|| fallback_session_id(path));
-    let title = build_title(&session_id, cwd.as_deref(), first_user_message.as_deref());
-    let aggregate_text = build_aggregate_text(&title, cwd.as_deref(), &messages, &events);
+    fn into_session(self, path: &Path) -> ParsedSession {
+        let session_id = self.session_id.unwrap_or_else(|| fallback_session_id(path));
+        let title = build_title(
+            &session_id,
+            self.cwd.as_deref(),
+            self.first_user_message.as_deref(),
+        );
+        let aggregate_text =
+            build_aggregate_text(&title, self.cwd.as_deref(), &self.messages, &self.events);
 
-    Ok(ParsedSession {
-        session_id,
-        cwd,
-        title,
-        aggregate_text,
-        started_at,
-        ended_at,
-        messages,
-        events,
-    })
+        ParsedSession {
+            session_id,
+            cwd: self.cwd,
+            title,
+            aggregate_text,
+            tail_record: self.tail_record,
+            started_at: self.started_at,
+            ended_at: self.ended_at,
+            messages: self.messages,
+            events: self.events,
+        }
+    }
+
+    fn into_tail(self) -> ParsedSessionTail {
+        ParsedSessionTail {
+            session_id: self.session_id,
+            cwd: self.cwd,
+            aggregate_text: build_tail_aggregate_text(&self.messages, &self.events),
+            tail_record: self.tail_record,
+            ended_at: self.ended_at,
+            messages: self.messages,
+            events: self.events,
+        }
+    }
 }
 
 fn extract_message_text(payload: &Value) -> String {
@@ -319,6 +386,19 @@ fn build_aggregate_text(
     if let Some(cwd) = cwd {
         parts.push(cwd.to_string());
     }
+    for message in messages {
+        parts.push(trim_for_storage(&message.text, 1200));
+    }
+    for event in events {
+        if !event.summary.is_empty() {
+            parts.push(trim_for_storage(&event.summary, 600));
+        }
+    }
+    normalize_text(parts.join("\n"))
+}
+
+fn build_tail_aggregate_text(messages: &[ParsedMessage], events: &[ParsedEvent]) -> String {
+    let mut parts = Vec::new();
     for message in messages {
         parts.push(trim_for_storage(&message.text, 1200));
     }

@@ -240,6 +240,7 @@ codex-threads --json events search "agent" --event-type agent_reasoning --until 
 - `sync` 会输出一段“同步冷却”摘要，说明当前冷却间隔、是否命中冷却、最近一次成功刷新时间，以及下次允许刷新时间
 - `sync` 在真正执行前会先输出一段同步预检摘要，说明本次检测到的文件规模、变更数量和建议动作
 - `--json sync` 会额外返回 `scope`、`cooldown`、`preflight` 和 `resume` 字段，方便 agent 先理解这次同步实际覆盖的范围，以及是应当跳过、继续执行，还是进入续跑
+- `sync` 结果会额外回显本次命中的写入策略统计，例如尾部追加、整条重建和回退重建，方便快速判断大 session 是否真的走了增量路径
 - 长时间运行的 `sync` 会在 `stderr` 持续输出阶段进度；非交互环境下使用稳定的阶段文本，交互式终端下会退化成单行进度条样式
 - `--json sync` 在保留 `stderr` 进度反馈的同时，还会额外返回 `progress` 字段，方便 agent 在结束后读取本次阶段和进度汇总
 - 同一个索引目录同一时间只允许一个 `sync` 写任务运行；如果命中活跃锁，新的 `sync` 会直接退出并提示已有同步正在进行
@@ -253,6 +254,7 @@ codex-threads --json events search "agent" --event-type agent_reasoning --until 
 ## 设计要点
 
 - 增量同步：仅重建新增或变更过的 `.jsonl` 会话
+- 大 session 优化：对持续追加的会话优先走 append-tail 增量刷新，遇到截断或改写时再回退整条重建
 - SQLite 索引：线程、消息、事件分表存储
 - FTS 优先：若 SQLite 支持 FTS5 则用全文检索，否则自动回退到 `LIKE`
 - 线程聚合搜索：按标题、路径、消息内容和事件摘要搜索整条线程

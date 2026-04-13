@@ -6,6 +6,9 @@ use super::search_meta::SearchExplain;
 pub struct SyncStats {
     pub scanned_files: usize,
     pub indexed_files: usize,
+    pub appended_files: usize,
+    pub rebuilt_files: usize,
+    pub fallback_rebuilt_files: usize,
     pub skipped_files: usize,
     pub failed_files: usize,
     pub removed_files: usize,

@@ -10,7 +10,8 @@ pub fn init_schema(conn: &Connection) -> Result<bool> {
             session_id TEXT,
             modified_at INTEGER NOT NULL,
             size INTEGER NOT NULL,
-            synced_at TEXT NOT NULL
+            synced_at TEXT NOT NULL,
+            tail_record TEXT
         );
 
         CREATE TABLE IF NOT EXISTS threads (
@@ -56,6 +57,7 @@ pub fn init_schema(conn: &Connection) -> Result<bool> {
         CREATE INDEX IF NOT EXISTS idx_events_session_id ON events(session_id, idx);
         "#,
     )?;
+    ensure_column(conn, "files", "tail_record", "TEXT")?;
 
     let fts = conn.execute_batch(
         r#"
@@ -82,4 +84,20 @@ pub fn init_schema(conn: &Connection) -> Result<bool> {
         );
         Ok(false)
     }
+}
+
+fn ensure_column(conn: &Connection, table: &str, column: &str, definition: &str) -> Result<()> {
+    let sql = format!("PRAGMA table_info({table})");
+    let mut stmt = conn.prepare(&sql)?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let existing = row.get::<_, String>(1)?;
+        if existing == column {
+            return Ok(());
+        }
+    }
+
+    let alter = format!("ALTER TABLE {table} ADD COLUMN {column} {definition}");
+    conn.execute(&alter, [])?;
+    Ok(())
 }
