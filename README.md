@@ -16,6 +16,7 @@
 
 - 本项目聚焦一个简单问题：把本地 Codex 历史线程变成真正可复用的知识索引。
 - CLI 设计参考 OpenAI Codex 官方用例文档 [Create a CLI Codex can use](https://developers.openai.com/codex/use-cases/agent-friendly-clis)，重点放在稳定命令面、清晰帮助输出和结构化 JSON。
+- 也感谢 [Wangnov/cli-design-framework](https://github.com/Wangnov/cli-design-framework) 提供的 skill 指导与命令行设计思路参考。
 - 工具默认读取 `~/.codex/sessions`，把线程、消息和事件增量索引到本地 SQLite，适合脚本和 agent 二次消费。
 
 ## Features
