@@ -8,6 +8,6 @@ pub use store::Store;
 pub use types::{
     EventRecord, EventSearchFilters, EventSearchHit, MessageRecord, MessageSearchFilters,
     MessageSearchHit, StatusSummary, SyncFailure, SyncLockStatus, SyncPlan, SyncPreflight,
-    SyncReport, SyncRequest, SyncScope, SyncStats, ThreadRead, ThreadRecord, ThreadSearchFilters,
-    ThreadSearchHit,
+    SyncReport, SyncRequest, SyncResume, SyncScope, SyncStats, ThreadRead, ThreadRecord,
+    ThreadSearchFilters, ThreadSearchHit,
 };

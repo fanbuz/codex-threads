@@ -532,3 +532,89 @@ fn sync_recovers_stale_lock_and_runs_successfully() {
     assert_eq!(json["stats"]["indexed_files"], 2);
     assert!(!lock_path.exists());
 }
+
+#[test]
+fn sync_saves_resume_state_when_budget_is_hit() {
+    let tmp = tempdir().unwrap();
+    let _ = common::write_fixture_sessions(tmp.path());
+    let index_dir = tmp.path().join("index");
+    let sessions_dir = tmp.path().join("sessions");
+
+    let output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "sync",
+            "--budget-files",
+            "1",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: Value = serde_json::from_slice(&output).unwrap();
+    let state_path = json["resume"]["state_path"].as_str().unwrap();
+    assert_eq!(json["scope"]["budget_files"], 1);
+    assert_eq!(json["resume"]["state"], "saved");
+    assert_eq!(json["resume"]["resumed_from_checkpoint"], false);
+    assert_eq!(json["resume"]["remaining_files"], 1);
+    assert_eq!(json["stats"]["threads"], 1);
+    assert_eq!(json["partial"], true);
+    assert!(std::path::Path::new(state_path).exists());
+}
+
+#[test]
+fn sync_resumes_from_saved_state_and_clears_it_when_done() {
+    let tmp = tempdir().unwrap();
+    let _ = common::write_fixture_sessions(tmp.path());
+    let index_dir = tmp.path().join("index");
+    let sessions_dir = tmp.path().join("sessions");
+
+    Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "sync",
+            "--budget-files",
+            "1",
+        ])
+        .assert()
+        .success();
+
+    let output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "sync",
+            "--budget-files",
+            "1",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: Value = serde_json::from_slice(&output).unwrap();
+    let state_path = json["resume"]["state_path"].as_str().unwrap();
+    assert_eq!(json["resume"]["state"], "completed");
+    assert_eq!(json["resume"]["resumed_from_checkpoint"], true);
+    assert_eq!(json["resume"]["remaining_files"], 0);
+    assert_eq!(json["stats"]["threads"], 2);
+    assert_eq!(json["partial"], false);
+    assert!(!std::path::Path::new(state_path).exists());
+}

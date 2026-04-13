@@ -5,7 +5,7 @@ use serde::Serialize;
 
 use crate::cli::SyncArgs;
 use crate::index::{
-    StatusSummary, Store, SyncFailure, SyncPreflight, SyncRequest, SyncScope, SyncStats,
+    StatusSummary, Store, SyncFailure, SyncPreflight, SyncRequest, SyncResume, SyncScope, SyncStats,
 };
 use crate::output::Rendered;
 
@@ -16,6 +16,7 @@ struct SyncResponse {
     partial: bool,
     scope: SyncScope,
     preflight: SyncPreflight,
+    resume: SyncResume,
     sessions_dir: String,
     index_dir: String,
     stats: SyncStats,
@@ -39,18 +40,14 @@ pub fn run(
     let request = build_request(args);
     let mut sync_lock = store.acquire_sync_lock()?;
     sync_lock.heartbeat()?;
-    let plan = store.preflight_sync(sessions_dir, &request, Some(&mut sync_lock))?;
-    let report = if plan.preflight.recommended_action == "skip" {
-        store.skip_sync_report(sessions_dir, &plan.preflight)?
-    } else {
-        store.sync_sessions(sessions_dir, &request, Some(&mut sync_lock))?
-    };
+    let (plan, report) = store.run_sync(sessions_dir, &request, Some(&mut sync_lock))?;
     let response = SyncResponse {
         command: "sync",
         ok: true,
         partial: report.partial,
         scope: plan.scope.clone(),
         preflight: plan.preflight.clone(),
+        resume: report.resume.clone(),
         sessions_dir: sessions_dir.to_string_lossy().into_owned(),
         index_dir: index_dir.to_string_lossy().into_owned(),
         stats: report.stats.clone(),
@@ -72,6 +69,7 @@ pub fn run(
             render_scope_path(plan.scope.path.as_deref())
         ),
         format!("最近活跃: {}", render_scope_recent(plan.scope.recent)),
+        format!("预算文件: {}", render_scope_budget(plan.scope.budget_files)),
         format!("候选文件: {}", plan.scope.candidate_files),
         String::new(),
         "同步预检".to_string(),
@@ -86,8 +84,10 @@ pub fn run(
         format!("推荐动作: {}", render_action(&plan.preflight)),
         format!("原因: {}", plan.preflight.reason),
         String::new(),
-        if report.partial {
+        if !report.failures.is_empty() {
             "同步完成（部分失败）".to_string()
+        } else if report.resume.state == "saved" {
+            "同步完成（部分完成）".to_string()
         } else if plan.preflight.recommended_action == "skip" {
             "同步完成（无需更新）".to_string()
         } else {
@@ -103,7 +103,19 @@ pub fn run(
         format!("线程总数: {}", report.stats.threads),
         format!("消息总数: {}", report.stats.messages),
         format!("事件总数: {}", report.stats.events),
+        format!("续跑状态: {}", render_resume_state(&report.resume)),
+        format!(
+            "从续跑恢复: {}",
+            render_bool(report.resume.resumed_from_checkpoint)
+        ),
+        format!("剩余文件: {}", report.resume.remaining_files),
     ];
+    if report.resume.state != "idle" {
+        lines.push(format!("续跑状态文件: {}", report.resume.state_path));
+    }
+    if let Some(reason) = &report.resume.reason {
+        lines.push(format!("续跑说明: {}", reason));
+    }
     for failure in &report.failures {
         lines.push(format!("- {} {}", failure.path, failure.error));
     }
@@ -118,6 +130,7 @@ fn build_request(args: &SyncArgs) -> SyncRequest {
         until: args.until.clone(),
         path: args.path.clone(),
         recent: args.recent,
+        budget_files: args.budget_files,
     }
 }
 
@@ -142,6 +155,29 @@ fn render_scope_recent(value: Option<usize>) -> String {
     match value {
         Some(limit) => format!("最近 {} 个文件", limit),
         None => "不限制".to_string(),
+    }
+}
+
+fn render_scope_budget(value: Option<usize>) -> String {
+    match value {
+        Some(limit) => format!("每次最多 {} 个文件", limit),
+        None => "不限制".to_string(),
+    }
+}
+
+fn render_resume_state(resume: &SyncResume) -> &'static str {
+    match resume.state.as_str() {
+        "saved" => "已保存续跑状态",
+        "completed" => "已完成续跑并清理状态",
+        _ => "未启用",
+    }
+}
+
+fn render_bool(value: bool) -> &'static str {
+    if value {
+        "是"
+    } else {
+        "否"
     }
 }
 

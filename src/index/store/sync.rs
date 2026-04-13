@@ -16,6 +16,7 @@ use super::super::types::{
     SyncFailure, SyncPlan, SyncPreflight, SyncReport, SyncRequest, SyncScope, SyncStats,
 };
 use super::lock::SyncLockGuard;
+use super::resume::{build_sync_resume, SyncResumeState};
 use super::Store;
 
 #[derive(Debug, Clone)]
@@ -34,74 +35,143 @@ struct CandidateFile {
     effective_time: String,
 }
 
+#[derive(Debug, Clone)]
+struct PreparedSyncRun {
+    scope: SyncScope,
+    run_candidates: Vec<CandidateFile>,
+    unchanged_paths: Vec<String>,
+    total_files: usize,
+    changed_files: usize,
+    unchanged_files: usize,
+    total_bytes: u64,
+    largest_file_bytes: u64,
+    remaining_paths: Vec<String>,
+    resumed_from_checkpoint: bool,
+}
+
 impl Store {
-    pub(crate) fn preflight_sync(
-        &self,
-        sessions_dir: &Path,
-        request: &SyncRequest,
-        lock: Option<&mut SyncLockGuard>,
-    ) -> Result<SyncPlan> {
-        let existing = self.load_existing_files()?;
-        let (scope, candidates) = collect_candidate_files(sessions_dir, request, lock)?;
-        let mut total_files = 0usize;
-        let mut changed_files = 0usize;
-        let mut total_bytes = 0u64;
-        let mut largest_file_bytes = 0u64;
-
-        for candidate in &candidates {
-            total_files += 1;
-            total_bytes += candidate.size as u64;
-            largest_file_bytes = largest_file_bytes.max(candidate.size as u64);
-
-            let is_unchanged = existing
-                .get(&candidate.path_string)
-                .map(|state| {
-                    state.modified_at == candidate.modified_at && state.size == candidate.size
-                })
-                .unwrap_or(false);
-            if !is_unchanged {
-                changed_files += 1;
-            }
-        }
-
-        let unchanged_files = total_files.saturating_sub(changed_files);
-        let (recommended_action, reason) = classify_preflight(
-            total_files,
-            changed_files,
-            total_bytes,
-            largest_file_bytes,
-            request.is_scoped(),
-        );
-
-        Ok(SyncPlan {
-            scope,
-            preflight: SyncPreflight {
-                total_files,
-                changed_files,
-                unchanged_files,
-                total_bytes,
-                largest_file_bytes,
-                recommended_action,
-                reason,
-            },
-        })
-    }
-
-    pub(crate) fn sync_sessions(
+    pub(crate) fn run_sync(
         &mut self,
         sessions_dir: &Path,
         request: &SyncRequest,
         mut lock: Option<&mut SyncLockGuard>,
-    ) -> Result<SyncReport> {
+    ) -> Result<(SyncPlan, SyncReport)> {
         let existing = self.load_existing_files()?;
-        let (_, candidates) = collect_candidate_files(sessions_dir, request, lock.as_deref_mut())?;
+        let prepared =
+            self.prepare_sync_run(sessions_dir, request, &existing, lock.as_deref_mut())?;
+        let (recommended_action, reason) = classify_preflight(
+            prepared.total_files,
+            prepared.changed_files,
+            prepared.total_bytes,
+            prepared.largest_file_bytes,
+            request.is_scoped(),
+        );
+        let preflight = SyncPreflight {
+            total_files: prepared.total_files,
+            changed_files: prepared.changed_files,
+            unchanged_files: prepared.unchanged_files,
+            total_bytes: prepared.total_bytes,
+            largest_file_bytes: prepared.largest_file_bytes,
+            recommended_action,
+            reason,
+        };
+        let plan = SyncPlan {
+            scope: prepared.scope.clone(),
+            preflight: preflight.clone(),
+        };
+
+        if preflight.recommended_action == "skip" {
+            let report = self.skip_sync_report(sessions_dir, &preflight, request, &prepared)?;
+            return Ok((plan, report));
+        }
+
+        let report = self.sync_sessions(existing, request, prepared, lock)?;
+        Ok((plan, report))
+    }
+
+    fn prepare_sync_run(
+        &self,
+        sessions_dir: &Path,
+        request: &SyncRequest,
+        existing: &HashMap<String, FileState>,
+        lock: Option<&mut SyncLockGuard>,
+    ) -> Result<PreparedSyncRun> {
+        let (mut scope, candidates) = collect_candidate_files(sessions_dir, request, lock)?;
+        let (candidates, resumed_from_checkpoint) = self.apply_resume_state(candidates, request)?;
+        let mut total_bytes = 0u64;
+        let mut largest_file_bytes = 0u64;
+        let mut changed_candidates = Vec::new();
+        let mut unchanged_paths = Vec::new();
+
+        // Keep unchanged files outside the budget checkpoint so partial runs only persist
+        // work that still needs a rebuild on the next invocation.
+        for candidate in candidates {
+            total_bytes += candidate.size as u64;
+            largest_file_bytes = largest_file_bytes.max(candidate.size as u64);
+            if is_unchanged(existing, &candidate) {
+                unchanged_paths.push(candidate.path_string.clone());
+            } else {
+                changed_candidates.push(candidate);
+            }
+        }
+
+        let total_files = changed_candidates.len() + unchanged_paths.len();
+        let changed_files = changed_candidates.len();
+        let unchanged_files = unchanged_paths.len();
+        let (run_candidates, remaining_paths) =
+            split_budgeted_candidates(changed_candidates, request.budget_files)?;
+        scope.budget_files = request.budget_files;
+        scope.candidate_files = total_files;
+
+        Ok(PreparedSyncRun {
+            scope,
+            run_candidates,
+            unchanged_paths,
+            total_files,
+            changed_files,
+            unchanged_files,
+            total_bytes,
+            largest_file_bytes,
+            remaining_paths,
+            resumed_from_checkpoint,
+        })
+    }
+
+    fn apply_resume_state(
+        &self,
+        candidates: Vec<CandidateFile>,
+        request: &SyncRequest,
+    ) -> Result<(Vec<CandidateFile>, bool)> {
+        let Some(state) = self.load_sync_resume_state()? else {
+            return Ok((candidates, false));
+        };
+        if state.request != *request {
+            return Ok((candidates, false));
+        }
+
+        Ok((resume_candidates(candidates, state), true))
+    }
+
+    fn sync_sessions(
+        &mut self,
+        existing: HashMap<String, FileState>,
+        request: &SyncRequest,
+        prepared: PreparedSyncRun,
+        mut lock: Option<&mut SyncLockGuard>,
+    ) -> Result<SyncReport> {
         let mut seen_paths = HashSet::new();
         let mut retained_session_ids = HashSet::new();
+        // Budgeted runs can skip parsing unchanged files, but cleanup still needs to treat
+        // them as part of the current scope so an unscoped sync never prunes them by mistake.
+        for path in &prepared.unchanged_paths {
+            seen_paths.insert(path.clone());
+            retain_previous_session_id(&existing, path, &mut retained_session_ids);
+        }
         let fts_available = self.fts_available;
         let mut stats = SyncStats {
-            scanned_files: 0,
+            scanned_files: prepared.unchanged_paths.len(),
             indexed_files: 0,
-            skipped_files: 0,
+            skipped_files: prepared.unchanged_paths.len(),
             failed_files: 0,
             removed_files: 0,
             threads: 0,
@@ -112,7 +182,7 @@ impl Store {
 
         let tx = self.conn.transaction()?;
 
-        for (index, candidate) in candidates.into_iter().enumerate() {
+        for (index, candidate) in prepared.run_candidates.iter().enumerate() {
             heartbeat_if_needed(&mut lock, index)?;
             stats.scanned_files += 1;
             seen_paths.insert(candidate.path_string.clone());
@@ -190,23 +260,29 @@ impl Store {
         stats.threads = counts.0;
         stats.messages = counts.1;
         stats.events = counts.2;
+        let processed_files = prepared.run_candidates.len();
+        let resume = self.finalize_sync_resume_state(request, &prepared, processed_files)?;
         Ok(SyncReport {
-            partial: !failures.is_empty(),
+            partial: !failures.is_empty() || resume.state == "saved",
             stats,
             failures,
+            resume,
         })
     }
 
-    pub fn skip_sync_report(
+    fn skip_sync_report(
         &self,
         sessions_dir: &Path,
         preflight: &SyncPreflight,
+        request: &SyncRequest,
+        prepared: &PreparedSyncRun,
     ) -> Result<SyncReport> {
         if !sessions_dir.exists() {
             bail!("会话目录不存在: {}", sessions_dir.display());
         }
 
         let counts = self.count_totals()?;
+        let resume = self.finalize_sync_resume_state(request, prepared, 0)?;
         Ok(SyncReport {
             partial: false,
             stats: SyncStats {
@@ -220,7 +296,53 @@ impl Store {
                 events: counts.2,
             },
             failures: Vec::new(),
+            resume,
         })
+    }
+
+    fn finalize_sync_resume_state(
+        &self,
+        request: &SyncRequest,
+        prepared: &PreparedSyncRun,
+        processed_files: usize,
+    ) -> Result<super::super::types::SyncResume> {
+        let state_path = self.sync_resume_state_path();
+        if !prepared.remaining_paths.is_empty() {
+            let state = SyncResumeState::new(request.clone(), prepared.remaining_paths.clone())?;
+            self.save_sync_resume_state(&state)?;
+            return Ok(build_sync_resume(
+                state_path,
+                "saved",
+                request.budget_files,
+                prepared.resumed_from_checkpoint,
+                processed_files,
+                prepared.remaining_paths.len(),
+                Some("Remaining changed files were saved for the next sync run.".to_string()),
+            ));
+        }
+
+        if prepared.resumed_from_checkpoint {
+            self.clear_sync_resume_state()?;
+            return Ok(build_sync_resume(
+                state_path,
+                "completed",
+                request.budget_files,
+                true,
+                processed_files,
+                0,
+                Some("Saved sync state was consumed and cleared.".to_string()),
+            ));
+        }
+
+        Ok(build_sync_resume(
+            state_path,
+            "idle",
+            request.budget_files,
+            false,
+            processed_files,
+            0,
+            None,
+        ))
     }
 
     fn load_existing_files(&self) -> Result<HashMap<String, FileState>> {
@@ -247,6 +369,52 @@ impl Store {
     }
 }
 
+fn is_unchanged(existing: &HashMap<String, FileState>, candidate: &CandidateFile) -> bool {
+    existing
+        .get(&candidate.path_string)
+        .map(|state| state.modified_at == candidate.modified_at && state.size == candidate.size)
+        .unwrap_or(false)
+}
+
+fn split_budgeted_candidates(
+    mut candidates: Vec<CandidateFile>,
+    budget_files: Option<usize>,
+) -> Result<(Vec<CandidateFile>, Vec<String>)> {
+    let Some(limit) = budget_files else {
+        return Ok((candidates, Vec::new()));
+    };
+    if limit == 0 {
+        bail!("--budget-files 需要大于 0");
+    }
+    if candidates.len() <= limit {
+        return Ok((candidates, Vec::new()));
+    }
+
+    let remaining = candidates
+        .split_off(limit)
+        .into_iter()
+        .map(|candidate| candidate.path_string)
+        .collect();
+    Ok((candidates, remaining))
+}
+
+fn resume_candidates(candidates: Vec<CandidateFile>, state: SyncResumeState) -> Vec<CandidateFile> {
+    let mut by_path = candidates
+        .into_iter()
+        .map(|candidate| (candidate.path_string.clone(), candidate))
+        .collect::<HashMap<_, _>>();
+    let mut resumed = Vec::new();
+
+    // Reuse the saved path order so repeated runs keep a stable checkpoint sequence.
+    for path in state.pending_paths {
+        if let Some(candidate) = by_path.remove(&path) {
+            resumed.push(candidate);
+        }
+    }
+
+    resumed
+}
+
 fn collect_candidate_files(
     sessions_dir: &Path,
     request: &SyncRequest,
@@ -260,6 +428,9 @@ fn collect_candidate_files(
     let until = normalize_scope_time(request.until.as_deref(), "--until")?;
     if matches!(request.recent, Some(0)) {
         bail!("--recent 需要大于 0");
+    }
+    if matches!(request.budget_files, Some(0)) {
+        bail!("--budget-files 需要大于 0");
     }
     if let (Some(since), Some(until)) = (&since, &until) {
         if since > until {
@@ -326,6 +497,7 @@ fn collect_candidate_files(
             until,
             path: request.path.clone(),
             recent: request.recent,
+            budget_files: request.budget_files,
             candidate_files: candidates.len(),
         },
         candidates,

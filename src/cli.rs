@@ -69,6 +69,13 @@ pub struct SyncArgs {
 
     #[arg(long, value_name = "RECENT", help = "只同步最近活跃的 N 个会话文件")]
     pub recent: Option<usize>,
+
+    #[arg(
+        long,
+        value_name = "BUDGET_FILES",
+        help = "单次同步最多处理多少个会话文件"
+    )]
+    pub budget_files: Option<usize>,
 }
 
 #[derive(Debug, Subcommand)]

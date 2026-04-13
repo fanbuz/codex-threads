@@ -180,6 +180,7 @@ codex-threads --json sync
 codex-threads sync --since 2026-04-12T10:30:00Z
 codex-threads sync --path session-beta
 codex-threads --json sync --recent 20
+codex-threads --json sync --budget-files 200
 codex-threads messages search "build a CLI" --limit 20
 codex-threads events search "agent_reasoning" --limit 20
 codex-threads --json threads search "websocket reconnect"
@@ -201,6 +202,7 @@ codex-threads status
 - `--until RFC3339` 只同步不晚于该时间的会话文件
 - `--path PATH` 只同步路径命中该片段的会话文件
 - `--recent N` 只同步最近活跃的 N 个会话文件
+- `--budget-files N` 单次最多处理 N 个需要刷新的会话文件；超出部分会保存为本地续跑状态，等待下次同参数 `sync` 继续处理
 
 搜索过滤参数：
 
@@ -232,11 +234,13 @@ codex-threads --json events search "agent" --event-type agent_reasoning --until 
 - `--json` 模式不输出格式化耗时文本，只提供稳定字段 `duration_ms`
 - `sync` 会先输出一段“同步范围”摘要，明确本次时间范围、路径过滤、最近活跃限制和命中的候选文件数
 - `sync` 在真正执行前会先输出一段同步预检摘要，说明本次检测到的文件规模、变更数量和建议动作
-- `--json sync` 会额外返回 `scope` 和 `preflight` 字段，方便 agent 先理解这次同步实际覆盖的范围，以及是应当跳过，还是值得继续执行
+- `--json sync` 会额外返回 `scope`、`preflight` 和 `resume` 字段，方便 agent 先理解这次同步实际覆盖的范围，以及是应当跳过、继续执行，还是进入续跑
 - 同一个索引目录同一时间只允许一个 `sync` 写任务运行；如果命中活跃锁，新的 `sync` 会直接退出并提示已有同步正在进行
 - `sync` 会自动接管超过心跳窗口的过期锁，避免异常退出后的锁文件长期阻塞后续同步
 - `status` 会额外展示当前同步锁状态；`--json status` 则会返回 `status.sync_lock` 结构，方便 agent 判断索引目录是否正被同步占用
 - 范围化 `sync` 只更新命中范围，不会顺带清理范围外历史；如果要做完整清理，请直接运行不带范围参数的 `sync`
+- 当 `--budget-files` 命中预算上限时，本次 `sync` 会返回 `partial=true` 和 `resume.state=saved`，并在索引目录旁写入 `sync.resume.json`
+- 后续只要再次用相同参数执行 `sync`，CLI 会自动从 `sync.resume.json` 继续，直到 `resume.state=completed` 后清理这个本地状态文件
 
 ## 设计要点
 
@@ -251,6 +255,7 @@ codex-threads --json events search "agent" --event-type agent_reasoning --until 
 - `src/index/types.rs`：索引域的公共数据结构，集中放同步统计、读取结果和搜索结果模型
 - `src/index/store/`：索引存储与核心流程
   - `mod.rs`：`Store` 入口、状态汇总与基础统计
+  - `resume.rs`：预算化同步的本地续跑状态保存与清理
   - `sync.rs`：同步扫描、会话重建与索引写入
   - `search.rs`：线程、消息、事件三类搜索与过滤逻辑
   - `read.rs`：线程、消息、事件读取逻辑

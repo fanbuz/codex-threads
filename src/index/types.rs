@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::search_meta::SearchExplain;
 
@@ -25,6 +25,7 @@ pub struct SyncReport {
     pub stats: SyncStats,
     pub partial: bool,
     pub failures: Vec<SyncFailure>,
+    pub resume: SyncResume,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -52,17 +53,35 @@ pub struct SyncLockStatus {
     pub reason: Option<String>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncResume {
+    pub state: String,
+    pub state_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub budget_files: Option<usize>,
+    pub resumed_from_checkpoint: bool,
+    pub processed_files: usize,
+    pub remaining_files: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncRequest {
     pub since: Option<String>,
     pub until: Option<String>,
     pub path: Option<String>,
     pub recent: Option<usize>,
+    pub budget_files: Option<usize>,
 }
 
 impl SyncRequest {
     pub fn is_scoped(&self) -> bool {
-        self.since.is_some() || self.until.is_some() || self.path.is_some() || self.recent.is_some()
+        self.since.is_some()
+            || self.until.is_some()
+            || self.path.is_some()
+            || self.recent.is_some()
+            || self.budget_files.is_some()
     }
 }
 
@@ -76,6 +95,8 @@ pub struct SyncScope {
     pub path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recent: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub budget_files: Option<usize>,
     pub candidate_files: usize,
 }
 
