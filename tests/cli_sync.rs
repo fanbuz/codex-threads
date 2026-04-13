@@ -618,3 +618,23 @@ fn sync_resumes_from_saved_state_and_clears_it_when_done() {
     assert_eq!(json["partial"], false);
     assert!(!std::path::Path::new(state_path).exists());
 }
+
+#[test]
+fn sync_lock_fixture_writes_valid_json_for_windows_style_paths() {
+    let tmp = tempdir().unwrap();
+    let index_dir = tmp.path().join(r"C:\runner\threads-index");
+    let lock_path = common::write_sync_lock(
+        &index_dir,
+        4242,
+        "2026-04-13T14:00:00Z",
+        "2026-04-13T14:00:00Z",
+    );
+
+    let raw = std::fs::read_to_string(lock_path).unwrap();
+    let json: Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(json["pid"], 4242);
+    assert_eq!(
+        json["index_path"],
+        index_dir.join("threads.sqlite3").to_string_lossy().to_string()
+    );
+}

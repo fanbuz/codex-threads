@@ -3,6 +3,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use serde_json::json;
+
 pub fn write_fixture_sessions(root: &Path) -> (PathBuf, PathBuf) {
     let session_dir = root.join("sessions").join("2026").join("04").join("12");
     fs::create_dir_all(&session_dir).unwrap();
@@ -59,15 +61,16 @@ pub fn write_sync_lock(
 ) -> PathBuf {
     fs::create_dir_all(index_dir).unwrap();
     let lock_path = index_dir.join("sync.lock.json");
+    let payload = json!({
+        "pid": pid,
+        "command": "sync",
+        "index_path": index_dir.join("threads.sqlite3").to_string_lossy().to_string(),
+        "started_at": started_at,
+        "heartbeat_at": heartbeat_at,
+    });
     fs::write(
         &lock_path,
-        format!(
-            "{{\"pid\":{},\"command\":\"sync\",\"index_path\":\"{}\",\"started_at\":\"{}\",\"heartbeat_at\":\"{}\"}}",
-            pid,
-            index_dir.join("threads.sqlite3").to_string_lossy(),
-            started_at,
-            heartbeat_at
-        ),
+        serde_json::to_vec(&payload).unwrap(),
     )
     .unwrap();
     lock_path
