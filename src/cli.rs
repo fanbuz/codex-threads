@@ -35,7 +35,10 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    #[command(about = "增量扫描会话文件并更新索引")]
+    #[command(
+        about = "增量扫描会话文件并更新索引",
+        after_help = "长时间同步会自动输出阶段进度；交互式终端会显示单行进度条，非交互环境会写到 stderr。"
+    )]
     Sync(SyncArgs),
     #[command(about = "查看索引状态和统计信息")]
     Status,

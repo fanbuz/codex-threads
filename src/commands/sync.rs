@@ -1,3 +1,4 @@
+use std::io::{self, IsTerminal, Write};
 use std::path::Path;
 
 use anyhow::Result;
@@ -5,7 +6,8 @@ use serde::Serialize;
 
 use crate::cli::SyncArgs;
 use crate::index::{
-    StatusSummary, Store, SyncFailure, SyncPreflight, SyncRequest, SyncResume, SyncScope, SyncStats,
+    StatusSummary, Store, SyncFailure, SyncPreflight, SyncProgressEvent, SyncProgressObserver,
+    SyncRequest, SyncResume, SyncScope, SyncStats,
 };
 use crate::output::Rendered;
 
@@ -16,6 +18,7 @@ struct SyncResponse {
     partial: bool,
     scope: SyncScope,
     preflight: SyncPreflight,
+    progress: SyncProgressSummary,
     resume: SyncResume,
     sessions_dir: String,
     index_dir: String,
@@ -31,6 +34,221 @@ struct StatusResponse {
     status: StatusSummary,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct SyncProgressSummary {
+    mode: String,
+    current_phase: String,
+    phases: Vec<String>,
+    total_files: usize,
+    processed_files: usize,
+    indexed_files: usize,
+    skipped_files: usize,
+    failed_files: usize,
+    partial: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SyncProgressMode {
+    TtyBar,
+    StderrLines,
+}
+
+impl SyncProgressMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::TtyBar => "tty-bar",
+            Self::StderrLines => "stderr-lines",
+        }
+    }
+}
+
+struct SyncProgressReporter {
+    mode: SyncProgressMode,
+    summary: SyncProgressSummary,
+    tty_line_active: bool,
+    last_processed_reported: usize,
+}
+
+impl SyncProgressReporter {
+    fn new() -> Self {
+        let mode = if io::stderr().is_terminal() {
+            SyncProgressMode::TtyBar
+        } else {
+            SyncProgressMode::StderrLines
+        };
+        Self {
+            mode,
+            summary: SyncProgressSummary {
+                mode: mode.as_str().to_string(),
+                current_phase: "idle".to_string(),
+                phases: Vec::new(),
+                total_files: 0,
+                processed_files: 0,
+                indexed_files: 0,
+                skipped_files: 0,
+                failed_files: 0,
+                partial: false,
+            },
+            tty_line_active: false,
+            last_processed_reported: 0,
+        }
+    }
+
+    fn into_summary(self) -> SyncProgressSummary {
+        self.summary
+    }
+
+    fn remember_phase(&mut self, phase_key: &str) {
+        self.summary.current_phase = phase_key.to_string();
+        if !self.summary.phases.iter().any(|phase| phase == phase_key) {
+            self.summary.phases.push(phase_key.to_string());
+        }
+    }
+
+    fn write_line(&mut self, line: &str) {
+        if self.tty_line_active {
+            let mut stderr = io::stderr().lock();
+            let _ = writeln!(stderr);
+            self.tty_line_active = false;
+        }
+        let mut stderr = io::stderr().lock();
+        let _ = writeln!(stderr, "{line}");
+    }
+
+    fn write_tty_progress(&mut self, phase_label: &str) {
+        let line = render_tty_progress_line(
+            phase_label,
+            self.summary.processed_files,
+            self.summary.total_files,
+            self.summary.indexed_files,
+            self.summary.skipped_files,
+            self.summary.failed_files,
+        );
+        let mut stderr = io::stderr().lock();
+        let _ = write!(stderr, "\r{line}");
+        let _ = stderr.flush();
+        self.tty_line_active = true;
+    }
+
+    fn update_counts(
+        &mut self,
+        total_files: usize,
+        processed_files: usize,
+        indexed_files: usize,
+        skipped_files: usize,
+        failed_files: usize,
+    ) {
+        self.summary.total_files = total_files;
+        self.summary.processed_files = processed_files;
+        self.summary.indexed_files = indexed_files;
+        self.summary.skipped_files = skipped_files;
+        self.summary.failed_files = failed_files;
+    }
+
+    fn maybe_write_index_line(&mut self, phase_label: &str) {
+        let step = progress_report_step(self.summary.total_files);
+        if self.summary.processed_files == self.last_processed_reported
+            || (self.summary.processed_files != self.summary.total_files
+                && self
+                    .summary
+                    .processed_files
+                    .saturating_sub(self.last_processed_reported)
+                    < step)
+        {
+            return;
+        }
+        self.last_processed_reported = self.summary.processed_files;
+        self.write_line(&format!(
+            "阶段: {phase_label} {}/{}（新增/重建 {}，跳过 {}，失败 {}）",
+            self.summary.processed_files,
+            self.summary.total_files,
+            self.summary.indexed_files,
+            self.summary.skipped_files,
+            self.summary.failed_files,
+        ));
+    }
+}
+
+impl SyncProgressObserver for SyncProgressReporter {
+    fn on_event(&mut self, event: SyncProgressEvent) {
+        match event {
+            SyncProgressEvent::ScanStarted => {
+                self.remember_phase("scanning");
+                self.write_line("阶段: 扫描候选文件");
+            }
+            SyncProgressEvent::ScanProgress {
+                visited_entries,
+                discovered_files,
+            } => {
+                if matches!(self.mode, SyncProgressMode::StderrLines)
+                    && discovered_files > 0
+                    && visited_entries > discovered_files
+                {
+                    self.write_line(&format!(
+                        "阶段: 扫描候选文件 已遍历 {} 项，命中 {} 个候选",
+                        visited_entries, discovered_files
+                    ));
+                }
+            }
+            SyncProgressEvent::IndexStarted {
+                total_files,
+                processed_files,
+            } => {
+                self.remember_phase("indexing");
+                self.update_counts(total_files, processed_files, 0, processed_files, 0);
+                self.last_processed_reported = processed_files;
+                match self.mode {
+                    SyncProgressMode::TtyBar => self.write_tty_progress("写入索引"),
+                    SyncProgressMode::StderrLines => {
+                        self.write_line(&format!("阶段: 写入索引 {processed_files}/{total_files}"))
+                    }
+                }
+            }
+            SyncProgressEvent::IndexProgress {
+                processed_files,
+                total_files,
+                indexed_files,
+                skipped_files,
+                failed_files,
+            } => {
+                self.update_counts(
+                    total_files,
+                    processed_files,
+                    indexed_files,
+                    skipped_files,
+                    failed_files,
+                );
+                match self.mode {
+                    SyncProgressMode::TtyBar => self.write_tty_progress("写入索引"),
+                    SyncProgressMode::StderrLines => self.maybe_write_index_line("写入索引"),
+                }
+            }
+            SyncProgressEvent::Finished {
+                total_files,
+                processed_files,
+                indexed_files,
+                skipped_files,
+                failed_files,
+                partial,
+            } => {
+                self.remember_phase("finished");
+                self.summary.partial = partial;
+                self.update_counts(
+                    total_files,
+                    processed_files,
+                    indexed_files,
+                    skipped_files,
+                    failed_files,
+                );
+                self.write_line(&format!(
+                    "阶段: 完成 {processed_files}/{total_files}（新增/重建 {}，跳过 {}，失败 {}）",
+                    indexed_files, skipped_files, failed_files
+                ));
+            }
+        }
+    }
+}
+
 pub fn run(
     store: &mut Store,
     sessions_dir: &Path,
@@ -40,13 +258,23 @@ pub fn run(
     let request = build_request(args);
     let mut sync_lock = store.acquire_sync_lock()?;
     sync_lock.heartbeat()?;
-    let (plan, report) = store.run_sync(sessions_dir, &request, Some(&mut sync_lock))?;
+    let mut progress = SyncProgressReporter::new();
+    let mut progress_observer: Option<&mut dyn SyncProgressObserver> = Some(&mut progress);
+    let (plan, report) = store.run_sync(
+        sessions_dir,
+        &request,
+        Some(&mut sync_lock),
+        &mut progress_observer,
+    )?;
+    drop(progress_observer);
+    let progress = progress.into_summary();
     let response = SyncResponse {
         command: "sync",
         ok: true,
         partial: report.partial,
         scope: plan.scope.clone(),
         preflight: plan.preflight.clone(),
+        progress: progress.clone(),
         resume: report.resume.clone(),
         sessions_dir: sessions_dir.to_string_lossy().into_owned(),
         index_dir: index_dir.to_string_lossy().into_owned(),
@@ -178,6 +406,39 @@ fn render_bool(value: bool) -> &'static str {
         "是"
     } else {
         "否"
+    }
+}
+
+fn render_tty_progress_line(
+    phase_label: &str,
+    processed_files: usize,
+    total_files: usize,
+    indexed_files: usize,
+    skipped_files: usize,
+    failed_files: usize,
+) -> String {
+    let width = 20usize;
+    let filled = if total_files == 0 {
+        0
+    } else {
+        ((processed_files.min(total_files) * width) + total_files - 1) / total_files
+    };
+    let bar = format!(
+        "{}{}",
+        "#".repeat(filled.min(width)),
+        "-".repeat(width.saturating_sub(filled.min(width)))
+    );
+    format!(
+        "[{}] {} {}/{} 新增/重建 {} 跳过 {} 失败 {}",
+        bar, phase_label, processed_files, total_files, indexed_files, skipped_files, failed_files
+    )
+}
+
+fn progress_report_step(total_files: usize) -> usize {
+    if total_files <= 10 {
+        1
+    } else {
+        (total_files / 10).max(1)
     }
 }
 

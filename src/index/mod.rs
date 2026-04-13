@@ -1,8 +1,10 @@
+mod progress;
 mod schema;
 mod search_meta;
 mod store;
 mod types;
 
+pub(crate) use progress::{SyncProgressEvent, SyncProgressObserver};
 pub use search_meta::{SearchBackend, SearchExplain, SearchMeta, SearchQueryMode, SearchReport};
 pub use store::Store;
 pub use types::{

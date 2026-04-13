@@ -68,11 +68,7 @@ pub fn write_sync_lock(
         "started_at": started_at,
         "heartbeat_at": heartbeat_at,
     });
-    fs::write(
-        &lock_path,
-        serde_json::to_vec(&payload).unwrap(),
-    )
-    .unwrap();
+    fs::write(&lock_path, serde_json::to_vec(&payload).unwrap()).unwrap();
     lock_path
 }
 

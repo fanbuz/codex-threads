@@ -12,6 +12,7 @@ use walkdir::WalkDir;
 
 use crate::parser::ParsedSession;
 
+use super::super::progress::{SyncProgressEvent, SyncProgressObserver};
 use super::super::types::{
     SyncFailure, SyncPlan, SyncPreflight, SyncReport, SyncRequest, SyncScope, SyncStats,
 };
@@ -55,10 +56,16 @@ impl Store {
         sessions_dir: &Path,
         request: &SyncRequest,
         mut lock: Option<&mut SyncLockGuard>,
+        progress: &mut Option<&mut dyn SyncProgressObserver>,
     ) -> Result<(SyncPlan, SyncReport)> {
         let existing = self.load_existing_files()?;
-        let prepared =
-            self.prepare_sync_run(sessions_dir, request, &existing, lock.as_deref_mut())?;
+        let prepared = self.prepare_sync_run(
+            sessions_dir,
+            request,
+            &existing,
+            lock.as_deref_mut(),
+            progress,
+        )?;
         let (recommended_action, reason) = classify_preflight(
             prepared.total_files,
             prepared.changed_files,
@@ -81,11 +88,12 @@ impl Store {
         };
 
         if preflight.recommended_action == "skip" {
-            let report = self.skip_sync_report(sessions_dir, &preflight, request, &prepared)?;
+            let report =
+                self.skip_sync_report(sessions_dir, &preflight, request, &prepared, progress)?;
             return Ok((plan, report));
         }
 
-        let report = self.sync_sessions(existing, request, prepared, lock)?;
+        let report = self.sync_sessions(existing, request, prepared, lock, progress)?;
         Ok((plan, report))
     }
 
@@ -95,8 +103,10 @@ impl Store {
         request: &SyncRequest,
         existing: &HashMap<String, FileState>,
         lock: Option<&mut SyncLockGuard>,
+        progress: &mut Option<&mut dyn SyncProgressObserver>,
     ) -> Result<PreparedSyncRun> {
-        let (mut scope, candidates) = collect_candidate_files(sessions_dir, request, lock)?;
+        let (mut scope, candidates) =
+            collect_candidate_files(sessions_dir, request, lock, progress)?;
         let (candidates, resumed_from_checkpoint) = self.apply_resume_state(candidates, request)?;
         let mut total_bytes = 0u64;
         let mut largest_file_bytes = 0u64;
@@ -158,6 +168,7 @@ impl Store {
         request: &SyncRequest,
         prepared: PreparedSyncRun,
         mut lock: Option<&mut SyncLockGuard>,
+        progress: &mut Option<&mut dyn SyncProgressObserver>,
     ) -> Result<SyncReport> {
         let mut seen_paths = HashSet::new();
         let mut retained_session_ids = HashSet::new();
@@ -179,6 +190,24 @@ impl Store {
             events: 0,
         };
         let mut failures = Vec::new();
+
+        emit_progress(
+            progress,
+            SyncProgressEvent::IndexStarted {
+                total_files: prepared.total_files,
+                processed_files: prepared.unchanged_paths.len(),
+            },
+        );
+        emit_progress(
+            progress,
+            SyncProgressEvent::IndexProgress {
+                processed_files: prepared.unchanged_paths.len(),
+                total_files: prepared.total_files,
+                indexed_files: stats.indexed_files,
+                skipped_files: stats.skipped_files,
+                failed_files: stats.failed_files,
+            },
+        );
 
         let tx = self.conn.transaction()?;
 
@@ -205,6 +234,18 @@ impl Store {
                 continue;
             }
 
+            let processed_files = prepared.unchanged_paths.len() + index + 1;
+            emit_progress(
+                progress,
+                SyncProgressEvent::IndexProgress {
+                    processed_files,
+                    total_files: prepared.total_files,
+                    indexed_files: stats.indexed_files,
+                    skipped_files: stats.skipped_files,
+                    failed_files: stats.failed_files,
+                },
+            );
+
             let parsed = match crate::parser::parse_session_file(&candidate.path) {
                 Ok(parsed) => parsed,
                 Err(error) => {
@@ -218,6 +259,16 @@ impl Store {
                         path: candidate.path_string.clone(),
                         error: error.to_string(),
                     });
+                    emit_progress(
+                        progress,
+                        SyncProgressEvent::IndexProgress {
+                            processed_files,
+                            total_files: prepared.total_files,
+                            indexed_files: stats.indexed_files,
+                            skipped_files: stats.skipped_files,
+                            failed_files: stats.failed_files,
+                        },
+                    );
                     continue;
                 }
             };
@@ -235,6 +286,16 @@ impl Store {
                 &parsed,
             )?;
             stats.indexed_files += 1;
+            emit_progress(
+                progress,
+                SyncProgressEvent::IndexProgress {
+                    processed_files,
+                    total_files: prepared.total_files,
+                    indexed_files: stats.indexed_files,
+                    skipped_files: stats.skipped_files,
+                    failed_files: stats.failed_files,
+                },
+            );
         }
 
         // Scoped sync only refreshes the selected slice and avoids pruning unrelated history.
@@ -262,12 +323,24 @@ impl Store {
         stats.events = counts.2;
         let processed_files = prepared.run_candidates.len();
         let resume = self.finalize_sync_resume_state(request, &prepared, processed_files)?;
-        Ok(SyncReport {
+        let report = SyncReport {
             partial: !failures.is_empty() || resume.state == "saved",
             stats,
             failures,
             resume,
-        })
+        };
+        emit_progress(
+            progress,
+            SyncProgressEvent::Finished {
+                total_files: prepared.total_files,
+                processed_files: report.stats.scanned_files,
+                indexed_files: report.stats.indexed_files,
+                skipped_files: report.stats.skipped_files,
+                failed_files: report.stats.failed_files,
+                partial: report.partial,
+            },
+        );
+        Ok(report)
     }
 
     fn skip_sync_report(
@@ -276,6 +349,7 @@ impl Store {
         preflight: &SyncPreflight,
         request: &SyncRequest,
         prepared: &PreparedSyncRun,
+        progress: &mut Option<&mut dyn SyncProgressObserver>,
     ) -> Result<SyncReport> {
         if !sessions_dir.exists() {
             bail!("会话目录不存在: {}", sessions_dir.display());
@@ -283,7 +357,7 @@ impl Store {
 
         let counts = self.count_totals()?;
         let resume = self.finalize_sync_resume_state(request, prepared, 0)?;
-        Ok(SyncReport {
+        let report = SyncReport {
             partial: false,
             stats: SyncStats {
                 scanned_files: preflight.total_files,
@@ -297,7 +371,19 @@ impl Store {
             },
             failures: Vec::new(),
             resume,
-        })
+        };
+        emit_progress(
+            progress,
+            SyncProgressEvent::Finished {
+                total_files: preflight.total_files,
+                processed_files: report.stats.scanned_files,
+                indexed_files: report.stats.indexed_files,
+                skipped_files: report.stats.skipped_files,
+                failed_files: report.stats.failed_files,
+                partial: false,
+            },
+        );
+        Ok(report)
     }
 
     fn finalize_sync_resume_state(
@@ -419,10 +505,13 @@ fn collect_candidate_files(
     sessions_dir: &Path,
     request: &SyncRequest,
     mut lock: Option<&mut SyncLockGuard>,
+    progress: &mut Option<&mut dyn SyncProgressObserver>,
 ) -> Result<(SyncScope, Vec<CandidateFile>)> {
     if !sessions_dir.exists() {
         bail!("会话目录不存在: {}", sessions_dir.display());
     }
+
+    emit_progress(progress, SyncProgressEvent::ScanStarted);
 
     let since = normalize_scope_time(request.since.as_deref(), "--since")?;
     let until = normalize_scope_time(request.until.as_deref(), "--until")?;
@@ -447,6 +536,15 @@ fn collect_candidate_files(
         .enumerate()
     {
         heartbeat_if_needed(&mut lock, index)?;
+        if index % 128 == 0 {
+            emit_progress(
+                progress,
+                SyncProgressEvent::ScanProgress {
+                    visited_entries: index + 1,
+                    discovered_files: candidates.len(),
+                },
+            );
+        }
         if !entry.file_type().is_file() {
             continue;
         }
@@ -480,6 +578,14 @@ fn collect_candidate_files(
         });
     }
 
+    emit_progress(
+        progress,
+        SyncProgressEvent::ScanProgress {
+            visited_entries: candidates.len(),
+            discovered_files: candidates.len(),
+        },
+    );
+
     // Keep the newest candidates first so `--recent` trims deterministically.
     candidates.sort_by(|left, right| {
         right
@@ -502,6 +608,12 @@ fn collect_candidate_files(
         },
         candidates,
     ))
+}
+
+fn emit_progress(progress: &mut Option<&mut dyn SyncProgressObserver>, event: SyncProgressEvent) {
+    if let Some(observer) = progress.as_deref_mut() {
+        observer.on_event(event);
+    }
 }
 
 fn heartbeat_if_needed(lock: &mut Option<&mut SyncLockGuard>, index: usize) -> Result<()> {

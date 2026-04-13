@@ -620,6 +620,67 @@ fn sync_resumes_from_saved_state_and_clears_it_when_done() {
 }
 
 #[test]
+fn sync_emits_progress_updates_to_stderr_for_non_tty_runs() {
+    let tmp = tempdir().unwrap();
+    let _ = common::write_fixture_sessions(tmp.path());
+    let index_dir = tmp.path().join("index");
+    let sessions_dir = tmp.path().join("sessions");
+
+    let output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "sync",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("阶段: 扫描候选文件"));
+    assert!(stderr.contains("阶段: 写入索引"));
+    assert!(stderr.contains("阶段: 完成"));
+    assert!(stderr.contains("2/2"));
+}
+
+#[test]
+fn sync_json_response_includes_progress_summary() {
+    let tmp = tempdir().unwrap();
+    let _ = common::write_fixture_sessions(tmp.path());
+    let index_dir = tmp.path().join("index");
+    let sessions_dir = tmp.path().join("sessions");
+
+    let output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "sync",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["progress"]["mode"], "stderr-lines");
+    assert_eq!(json["progress"]["total_files"], 2);
+    assert_eq!(json["progress"]["processed_files"], 2);
+    assert_eq!(json["progress"]["failed_files"], 0);
+    assert_eq!(json["progress"]["phases"][0], "scanning");
+    assert_eq!(json["progress"]["phases"][1], "indexing");
+    assert_eq!(json["progress"]["phases"][2], "finished");
+}
+
+#[test]
 fn sync_lock_fixture_writes_valid_json_for_windows_style_paths() {
     let tmp = tempdir().unwrap();
     let index_dir = tmp.path().join(r"C:\runner\threads-index");
@@ -635,6 +696,9 @@ fn sync_lock_fixture_writes_valid_json_for_windows_style_paths() {
     assert_eq!(json["pid"], 4242);
     assert_eq!(
         json["index_path"],
-        index_dir.join("threads.sqlite3").to_string_lossy().to_string()
+        index_dir
+            .join("threads.sqlite3")
+            .to_string_lossy()
+            .to_string()
     );
 }
