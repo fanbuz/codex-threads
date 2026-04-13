@@ -38,6 +38,39 @@ pub struct SyncPreflight {
     pub reason: String,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct SyncRequest {
+    pub since: Option<String>,
+    pub until: Option<String>,
+    pub path: Option<String>,
+    pub recent: Option<usize>,
+}
+
+impl SyncRequest {
+    pub fn is_scoped(&self) -> bool {
+        self.since.is_some() || self.until.is_some() || self.path.is_some() || self.recent.is_some()
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncScope {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub since: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub until: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recent: Option<usize>,
+    pub candidate_files: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncPlan {
+    pub scope: SyncScope,
+    pub preflight: SyncPreflight,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct StatusSummary {
     pub index_path: String,

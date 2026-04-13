@@ -83,3 +83,16 @@ fn search_help_shows_filter_options() {
         .stdout(predicate::str::contains("--until <UNTIL>"))
         .stdout(predicate::str::contains("--session <SESSION>"));
 }
+
+#[test]
+fn sync_help_shows_scope_options() {
+    Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args(["sync", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--since <SINCE>"))
+        .stdout(predicate::str::contains("--until <UNTIL>"))
+        .stdout(predicate::str::contains("--path <PATH>"))
+        .stdout(predicate::str::contains("--recent <RECENT>"));
+}

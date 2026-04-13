@@ -5,11 +5,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
 use rusqlite::{params, OptionalExtension, Transaction};
+use time::format_description::well_known::Rfc3339;
+use time::macros::format_description;
+use time::{OffsetDateTime, PrimitiveDateTime};
 use walkdir::WalkDir;
 
 use crate::parser::ParsedSession;
 
-use super::super::types::{SyncFailure, SyncPreflight, SyncReport, SyncStats};
+use super::super::types::{
+    SyncFailure, SyncPlan, SyncPreflight, SyncReport, SyncRequest, SyncScope, SyncStats,
+};
 use super::Store;
 
 #[derive(Debug, Clone)]
@@ -19,45 +24,34 @@ struct FileState {
     size: i64,
 }
 
-impl Store {
-    pub fn preflight_sync(&self, sessions_dir: &Path) -> Result<SyncPreflight> {
-        if !sessions_dir.exists() {
-            bail!("会话目录不存在: {}", sessions_dir.display());
-        }
+#[derive(Debug, Clone)]
+struct CandidateFile {
+    path: std::path::PathBuf,
+    path_string: String,
+    modified_at: i64,
+    size: i64,
+    effective_time: String,
+}
 
+impl Store {
+    pub fn preflight_sync(&self, sessions_dir: &Path, request: &SyncRequest) -> Result<SyncPlan> {
         let existing = self.load_existing_files()?;
+        let (scope, candidates) = collect_candidate_files(sessions_dir, request)?;
         let mut total_files = 0usize;
         let mut changed_files = 0usize;
         let mut total_bytes = 0u64;
         let mut largest_file_bytes = 0u64;
 
-        for entry in WalkDir::new(sessions_dir)
-            .into_iter()
-            .filter_map(Result::ok)
-        {
-            if !entry.file_type().is_file() {
-                continue;
-            }
-            if entry.path().extension().and_then(|value| value.to_str()) != Some("jsonl") {
-                continue;
-            }
-
+        for candidate in &candidates {
             total_files += 1;
-            let path = entry.path().to_path_buf();
-            let path_string = path.to_string_lossy().into_owned();
-            let metadata = fs::metadata(&path)
-                .with_context(|| format!("failed to stat {}", path.display()))?;
-            let modified_at = metadata
-                .modified()
-                .and_then(|value| system_time_to_nanos(value).map_err(std::io::Error::other))
-                .with_context(|| format!("failed to read mtime {}", path.display()))?;
-            let size = metadata.len();
-            total_bytes += size;
-            largest_file_bytes = largest_file_bytes.max(size);
+            total_bytes += candidate.size as u64;
+            largest_file_bytes = largest_file_bytes.max(candidate.size as u64);
 
             let is_unchanged = existing
-                .get(&path_string)
-                .map(|state| state.modified_at == modified_at && state.size == size as i64)
+                .get(&candidate.path_string)
+                .map(|state| {
+                    state.modified_at == candidate.modified_at && state.size == candidate.size
+                })
                 .unwrap_or(false);
             if !is_unchanged {
                 changed_files += 1;
@@ -65,26 +59,35 @@ impl Store {
         }
 
         let unchanged_files = total_files.saturating_sub(changed_files);
-        let (recommended_action, reason) =
-            classify_preflight(total_files, changed_files, total_bytes, largest_file_bytes);
-
-        Ok(SyncPreflight {
+        let (recommended_action, reason) = classify_preflight(
             total_files,
             changed_files,
-            unchanged_files,
             total_bytes,
             largest_file_bytes,
-            recommended_action,
-            reason,
+            request.is_scoped(),
+        );
+
+        Ok(SyncPlan {
+            scope,
+            preflight: SyncPreflight {
+                total_files,
+                changed_files,
+                unchanged_files,
+                total_bytes,
+                largest_file_bytes,
+                recommended_action,
+                reason,
+            },
         })
     }
 
-    pub fn sync_sessions(&mut self, sessions_dir: &Path) -> Result<SyncReport> {
-        if !sessions_dir.exists() {
-            bail!("会话目录不存在: {}", sessions_dir.display());
-        }
-
+    pub fn sync_sessions(
+        &mut self,
+        sessions_dir: &Path,
+        request: &SyncRequest,
+    ) -> Result<SyncReport> {
         let existing = self.load_existing_files()?;
+        let (_, candidates) = collect_candidate_files(sessions_dir, request)?;
         let mut seen_paths = HashSet::new();
         let mut retained_session_ids = HashSet::new();
         let fts_available = self.fts_available;
@@ -102,62 +105,21 @@ impl Store {
 
         let tx = self.conn.transaction()?;
 
-        for entry in WalkDir::new(sessions_dir)
-            .into_iter()
-            .filter_map(Result::ok)
-        {
-            if !entry.file_type().is_file() {
-                continue;
-            }
-            if entry.path().extension().and_then(|value| value.to_str()) != Some("jsonl") {
-                continue;
-            }
-
+        for candidate in candidates {
             stats.scanned_files += 1;
-            let path = entry.path().to_path_buf();
-            let path_string = path.to_string_lossy().into_owned();
-            seen_paths.insert(path_string.clone());
-
-            let metadata = match fs::metadata(&path)
-                .with_context(|| format!("failed to stat {}", path.display()))
-            {
-                Ok(metadata) => metadata,
-                Err(error) => {
-                    stats.failed_files += 1;
-                    retain_previous_session_id(&existing, &path_string, &mut retained_session_ids);
-                    failures.push(SyncFailure {
-                        path: path_string,
-                        error: error.to_string(),
-                    });
-                    continue;
-                }
-            };
-            let modified_at = match metadata
-                .modified()
-                .and_then(|value| system_time_to_nanos(value).map_err(std::io::Error::other))
-            {
-                Ok(modified_at) => modified_at,
-                Err(error) => {
-                    stats.failed_files += 1;
-                    retain_previous_session_id(&existing, &path_string, &mut retained_session_ids);
-                    failures.push(SyncFailure {
-                        path: path_string,
-                        error: error.to_string(),
-                    });
-                    continue;
-                }
-            };
-            let size = metadata.len() as i64;
+            seen_paths.insert(candidate.path_string.clone());
 
             let is_unchanged = existing
-                .get(&path_string)
-                .map(|state| state.modified_at == modified_at && state.size == size)
+                .get(&candidate.path_string)
+                .map(|state| {
+                    state.modified_at == candidate.modified_at && state.size == candidate.size
+                })
                 .unwrap_or(false);
 
             if is_unchanged {
                 stats.skipped_files += 1;
                 if let Some(session_id) = existing
-                    .get(&path_string)
+                    .get(&candidate.path_string)
                     .and_then(|state| state.session_id.clone())
                 {
                     retained_session_ids.insert(session_id);
@@ -165,13 +127,17 @@ impl Store {
                 continue;
             }
 
-            let parsed = match crate::parser::parse_session_file(&path) {
+            let parsed = match crate::parser::parse_session_file(&candidate.path) {
                 Ok(parsed) => parsed,
                 Err(error) => {
                     stats.failed_files += 1;
-                    retain_previous_session_id(&existing, &path_string, &mut retained_session_ids);
+                    retain_previous_session_id(
+                        &existing,
+                        &candidate.path_string,
+                        &mut retained_session_ids,
+                    );
                     failures.push(SyncFailure {
-                        path: path_string,
+                        path: candidate.path_string.clone(),
                         error: error.to_string(),
                     });
                     continue;
@@ -179,31 +145,35 @@ impl Store {
             };
             retained_session_ids.insert(parsed.session_id.clone());
             let old_session_id = existing
-                .get(&path_string)
+                .get(&candidate.path_string)
                 .and_then(|state| state.session_id.clone());
             replace_session(
                 &tx,
                 fts_available,
-                &path,
-                modified_at,
-                size,
+                &candidate.path,
+                candidate.modified_at,
+                candidate.size,
                 old_session_id.as_deref(),
                 &parsed,
             )?;
             stats.indexed_files += 1;
         }
 
-        for (path, state) in existing {
-            if seen_paths.contains(&path) {
-                continue;
-            }
-            if let Some(session_id) = state.session_id {
-                if !retained_session_ids.contains(&session_id) {
-                    delete_session(&tx, fts_available, &session_id)?;
+        // Scoped sync only refreshes the selected slice and avoids pruning unrelated history.
+        // Full cleanup still belongs to an unscoped sync run.
+        if !request.is_scoped() {
+            for (path, state) in existing {
+                if seen_paths.contains(&path) {
+                    continue;
                 }
+                if let Some(session_id) = state.session_id {
+                    if !retained_session_ids.contains(&session_id) {
+                        delete_session(&tx, fts_available, &session_id)?;
+                    }
+                }
+                tx.execute("DELETE FROM files WHERE path = ?1", params![path])?;
+                stats.removed_files += 1;
             }
-            tx.execute("DELETE FROM files WHERE path = ?1", params![path])?;
-            stats.removed_files += 1;
         }
 
         tx.commit()?;
@@ -267,6 +237,158 @@ impl Store {
         }
         Ok(map)
     }
+}
+
+fn collect_candidate_files(
+    sessions_dir: &Path,
+    request: &SyncRequest,
+) -> Result<(SyncScope, Vec<CandidateFile>)> {
+    if !sessions_dir.exists() {
+        bail!("会话目录不存在: {}", sessions_dir.display());
+    }
+
+    let since = normalize_scope_time(request.since.as_deref(), "--since")?;
+    let until = normalize_scope_time(request.until.as_deref(), "--until")?;
+    if matches!(request.recent, Some(0)) {
+        bail!("--recent 需要大于 0");
+    }
+    if let (Some(since), Some(until)) = (&since, &until) {
+        if since > until {
+            bail!("无效的同步时间范围: --since 不能晚于 --until");
+        }
+    }
+
+    let path_filter = request.path.as_ref().map(|value| value.to_lowercase());
+    let mut candidates = Vec::new();
+
+    for entry in WalkDir::new(sessions_dir)
+        .into_iter()
+        .filter_map(Result::ok)
+    {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        if entry.path().extension().and_then(|value| value.to_str()) != Some("jsonl") {
+            continue;
+        }
+
+        let path = entry.path().to_path_buf();
+        let path_string = path.to_string_lossy().into_owned();
+        if !matches_path_scope(&path_string, path_filter.as_deref()) {
+            continue;
+        }
+
+        let metadata =
+            fs::metadata(&path).with_context(|| format!("failed to stat {}", path.display()))?;
+        let modified_at = metadata
+            .modified()
+            .and_then(|value| system_time_to_nanos(value).map_err(std::io::Error::other))
+            .with_context(|| format!("failed to read mtime {}", path.display()))?;
+        let effective_time = resolve_candidate_time(&path, modified_at)?;
+        if !matches_time_scope(&effective_time, since.as_deref(), until.as_deref()) {
+            continue;
+        }
+
+        candidates.push(CandidateFile {
+            path,
+            path_string,
+            modified_at,
+            size: metadata.len() as i64,
+            effective_time,
+        });
+    }
+
+    // Keep the newest candidates first so `--recent` trims deterministically.
+    candidates.sort_by(|left, right| {
+        right
+            .effective_time
+            .cmp(&left.effective_time)
+            .then_with(|| left.path_string.cmp(&right.path_string))
+    });
+    if let Some(limit) = request.recent {
+        candidates.truncate(limit);
+    }
+
+    Ok((
+        SyncScope {
+            since,
+            until,
+            path: request.path.clone(),
+            recent: request.recent,
+            candidate_files: candidates.len(),
+        },
+        candidates,
+    ))
+}
+
+fn normalize_scope_time(value: Option<&str>, flag: &str) -> Result<Option<String>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.trim().is_empty() {
+        return Ok(None);
+    }
+
+    let parsed = OffsetDateTime::parse(value, &Rfc3339)
+        .with_context(|| format!("{flag} 需要使用 RFC3339 时间，例如 2026-04-12T10:30:00Z"))?;
+    parsed
+        .format(&Rfc3339)
+        .map(Some)
+        .map_err(|error| anyhow!("failed to format time: {}", error))
+}
+
+fn matches_path_scope(path: &str, filter: Option<&str>) -> bool {
+    let Some(filter) = filter else {
+        return true;
+    };
+    path.to_lowercase().contains(filter)
+}
+
+fn matches_time_scope(path_time: &str, since: Option<&str>, until: Option<&str>) -> bool {
+    if let Some(since) = since {
+        if path_time < since {
+            return false;
+        }
+    }
+    if let Some(until) = until {
+        if path_time > until {
+            return false;
+        }
+    }
+    true
+}
+
+fn resolve_candidate_time(path: &Path, modified_at: i64) -> Result<String> {
+    // Prefer the rollout timestamp encoded in the filename so range filtering stays cheap.
+    // Fall back to file mtime when the filename does not carry a parseable session timestamp.
+    if let Some(timestamp) = extract_session_timestamp(path) {
+        return Ok(timestamp);
+    }
+    format_modified_time(modified_at)
+}
+
+fn extract_session_timestamp(path: &Path) -> Option<String> {
+    let file_name = path.file_name()?.to_str()?;
+    let stem = file_name.strip_suffix(".jsonl")?;
+    let rest = stem.strip_prefix("rollout-")?;
+    let timestamp = match rest.rsplit_once("-session-") {
+        Some((timestamp, _)) => timestamp,
+        None => rest,
+    };
+    let parsed = PrimitiveDateTime::parse(
+        timestamp,
+        &format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]"),
+    )
+    .ok()?;
+    parsed.assume_utc().format(&Rfc3339).ok()
+}
+
+fn format_modified_time(modified_at: i64) -> Result<String> {
+    let datetime = OffsetDateTime::from_unix_timestamp_nanos(modified_at as i128)
+        .map_err(|error| anyhow!("invalid modified time: {}", error))?;
+    datetime
+        .format(&Rfc3339)
+        .map_err(|error| anyhow!("failed to format modified time: {}", error))
 }
 
 fn replace_session(
@@ -472,9 +594,15 @@ fn classify_preflight(
     changed_files: usize,
     total_bytes: u64,
     largest_file_bytes: u64,
+    scoped: bool,
 ) -> (String, String) {
     if total_files == 0 {
-        return ("skip".to_string(), "未发现可同步的会话文件".to_string());
+        let reason = if scoped {
+            "当前范围内未发现可同步的会话文件"
+        } else {
+            "未发现可同步的会话文件"
+        };
+        return ("skip".to_string(), reason.to_string());
     }
 
     if changed_files == 0 {

@@ -36,7 +36,7 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     #[command(about = "增量扫描会话文件并更新索引")]
-    Sync,
+    Sync(SyncArgs),
     #[command(about = "查看索引状态和统计信息")]
     Status,
     #[command(about = "搜索和读取线程")]
@@ -54,6 +54,21 @@ pub enum Command {
         #[command(subcommand)]
         command: EventsCommand,
     },
+}
+
+#[derive(Debug, Args, Clone, Default)]
+pub struct SyncArgs {
+    #[arg(long, value_name = "SINCE", help = "只同步不早于该时间的会话文件")]
+    pub since: Option<String>,
+
+    #[arg(long, value_name = "UNTIL", help = "只同步不晚于该时间的会话文件")]
+    pub until: Option<String>,
+
+    #[arg(long, value_name = "PATH", help = "只同步路径命中该片段的会话文件")]
+    pub path: Option<String>,
+
+    #[arg(long, value_name = "RECENT", help = "只同步最近活跃的 N 个会话文件")]
+    pub recent: Option<usize>,
 }
 
 #[derive(Debug, Subcommand)]

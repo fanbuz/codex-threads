@@ -17,7 +17,9 @@ pub fn run(cli: Cli) -> Result<Rendered> {
     let mut store = Store::open(&index_dir)?;
 
     match cli.command {
-        Command::Sync => run_with_timing(|| sync::run(&mut store, &sessions_dir, &index_dir)),
+        Command::Sync(args) => {
+            run_with_timing(|| sync::run(&mut store, &sessions_dir, &index_dir, &args))
+        }
         Command::Status => sync::status(&store),
         Command::Threads { command } => match command {
             ThreadsCommand::Search(args) => run_with_timing(|| search::threads(&store, &args)),

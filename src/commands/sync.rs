@@ -3,7 +3,10 @@ use std::path::Path;
 use anyhow::Result;
 use serde::Serialize;
 
-use crate::index::{StatusSummary, Store, SyncFailure, SyncPreflight, SyncStats};
+use crate::cli::SyncArgs;
+use crate::index::{
+    StatusSummary, Store, SyncFailure, SyncPreflight, SyncRequest, SyncScope, SyncStats,
+};
 use crate::output::Rendered;
 
 #[derive(Debug, Serialize)]
@@ -11,6 +14,7 @@ struct SyncResponse {
     command: &'static str,
     ok: bool,
     partial: bool,
+    scope: SyncScope,
     preflight: SyncPreflight,
     sessions_dir: String,
     index_dir: String,
@@ -26,18 +30,25 @@ struct StatusResponse {
     status: StatusSummary,
 }
 
-pub fn run(store: &mut Store, sessions_dir: &Path, index_dir: &Path) -> Result<Rendered> {
-    let preflight = store.preflight_sync(sessions_dir)?;
-    let report = if preflight.recommended_action == "skip" {
-        store.skip_sync_report(sessions_dir, &preflight)?
+pub fn run(
+    store: &mut Store,
+    sessions_dir: &Path,
+    index_dir: &Path,
+    args: &SyncArgs,
+) -> Result<Rendered> {
+    let request = build_request(args);
+    let plan = store.preflight_sync(sessions_dir, &request)?;
+    let report = if plan.preflight.recommended_action == "skip" {
+        store.skip_sync_report(sessions_dir, &plan.preflight)?
     } else {
-        store.sync_sessions(sessions_dir)?
+        store.sync_sessions(sessions_dir, &request)?
     };
     let response = SyncResponse {
         command: "sync",
         ok: true,
         partial: report.partial,
-        preflight: preflight.clone(),
+        scope: plan.scope.clone(),
+        preflight: plan.preflight.clone(),
         sessions_dir: sessions_dir.to_string_lossy().into_owned(),
         index_dir: index_dir.to_string_lossy().into_owned(),
         stats: report.stats.clone(),
@@ -45,18 +56,37 @@ pub fn run(store: &mut Store, sessions_dir: &Path, index_dir: &Path) -> Result<R
     };
 
     let mut lines = vec![
+        "同步范围".to_string(),
+        format!(
+            "时间起点: {}",
+            render_scope_bound(plan.scope.since.as_deref())
+        ),
+        format!(
+            "时间终点: {}",
+            render_scope_bound(plan.scope.until.as_deref())
+        ),
+        format!(
+            "路径过滤: {}",
+            render_scope_path(plan.scope.path.as_deref())
+        ),
+        format!("最近活跃: {}", render_scope_recent(plan.scope.recent)),
+        format!("候选文件: {}", plan.scope.candidate_files),
+        String::new(),
         "同步预检".to_string(),
-        format!("会话文件: {}", preflight.total_files),
-        format!("变更文件: {}", preflight.changed_files),
-        format!("未变更文件: {}", preflight.unchanged_files),
-        format!("总大小: {}", format_bytes(preflight.total_bytes)),
-        format!("最大文件: {}", format_bytes(preflight.largest_file_bytes)),
-        format!("推荐动作: {}", render_action(&preflight)),
-        format!("原因: {}", preflight.reason),
+        format!("会话文件: {}", plan.preflight.total_files),
+        format!("变更文件: {}", plan.preflight.changed_files),
+        format!("未变更文件: {}", plan.preflight.unchanged_files),
+        format!("总大小: {}", format_bytes(plan.preflight.total_bytes)),
+        format!(
+            "最大文件: {}",
+            format_bytes(plan.preflight.largest_file_bytes)
+        ),
+        format!("推荐动作: {}", render_action(&plan.preflight)),
+        format!("原因: {}", plan.preflight.reason),
         String::new(),
         if report.partial {
             "同步完成（部分失败）".to_string()
-        } else if preflight.recommended_action == "skip" {
+        } else if plan.preflight.recommended_action == "skip" {
             "同步完成（无需更新）".to_string()
         } else {
             "同步完成".to_string()
@@ -80,12 +110,36 @@ pub fn run(store: &mut Store, sessions_dir: &Path, index_dir: &Path) -> Result<R
     Rendered::new(text, &response)
 }
 
+fn build_request(args: &SyncArgs) -> SyncRequest {
+    SyncRequest {
+        since: args.since.clone(),
+        until: args.until.clone(),
+        path: args.path.clone(),
+        recent: args.recent,
+    }
+}
+
 fn render_action(preflight: &SyncPreflight) -> &'static str {
     match preflight.recommended_action.as_str() {
         "skip" => "跳过同步",
         "heavy-sync" => "执行同步（预计较重）",
         "rebuild-needed" => "建议重建",
         _ => "执行同步",
+    }
+}
+
+fn render_scope_bound(value: Option<&str>) -> &str {
+    value.unwrap_or("全部")
+}
+
+fn render_scope_path(value: Option<&str>) -> &str {
+    value.unwrap_or("全部")
+}
+
+fn render_scope_recent(value: Option<usize>) -> String {
+    match value {
+        Some(limit) => format!("最近 {} 个文件", limit),
+        None => "不限制".to_string(),
     }
 }
 

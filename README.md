@@ -176,6 +176,9 @@ codex-threads --json threads read <session-id> --limit 20
 ```bash
 codex-threads sync
 codex-threads --json sync
+codex-threads sync --since 2026-04-12T10:30:00Z
+codex-threads sync --path session-beta
+codex-threads --json sync --recent 20
 codex-threads messages search "build a CLI" --limit 20
 codex-threads events search "agent_reasoning" --limit 20
 codex-threads --json threads search "websocket reconnect"
@@ -190,6 +193,13 @@ codex-threads status
 - `--json` 输出纯 JSON
 - `--sessions-dir PATH` 覆盖默认会话目录
 - `--index-dir PATH` 覆盖默认索引目录
+
+`sync` 范围参数：
+
+- `--since RFC3339` 只同步不早于该时间的会话文件
+- `--until RFC3339` 只同步不晚于该时间的会话文件
+- `--path PATH` 只同步路径命中该片段的会话文件
+- `--recent N` 只同步最近活跃的 N 个会话文件
 
 搜索过滤参数：
 
@@ -219,8 +229,10 @@ codex-threads --json events search "agent" --event-type agent_reasoning --until 
 - 默认命令行输出会在 `sync`、`search`、`read` 等操作末尾追加 `耗时: ...`
 - 耗时会按时长动态显示为 `ms` 或 `s`
 - `--json` 模式不输出格式化耗时文本，只提供稳定字段 `duration_ms`
+- `sync` 会先输出一段“同步范围”摘要，明确本次时间范围、路径过滤、最近活跃限制和命中的候选文件数
 - `sync` 在真正执行前会先输出一段同步预检摘要，说明本次检测到的文件规模、变更数量和建议动作
-- `--json sync` 会额外返回 `preflight` 字段，方便 agent 先理解这次同步是应当跳过，还是值得继续执行
+- `--json sync` 会额外返回 `scope` 和 `preflight` 字段，方便 agent 先理解这次同步实际覆盖的范围，以及是应当跳过，还是值得继续执行
+- 范围化 `sync` 只更新命中范围，不会顺带清理范围外历史；如果要做完整清理，请直接运行不带范围参数的 `sync`
 
 ## 设计要点
 

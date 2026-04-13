@@ -63,6 +63,7 @@ fn sync_text_output_uses_plain_lines() {
         .stdout(predicates::str::contains("同步完成"))
         .stdout(predicates::str::contains("会话目录:"))
         .stdout(predicates::str::contains("索引目录:"))
+        .stdout(predicates::str::contains("同步范围"))
         .stdout(predicates::str::contains("扫描文件:"))
         .stdout(predicates::str::contains("线程总数:"))
         .stdout(predicates::str::contains("耗时:"));
@@ -289,4 +290,177 @@ fn sync_keeps_previous_index_when_existing_file_temporarily_breaks() {
         json["failures"][0]["path"],
         alpha_path.to_string_lossy().to_string()
     );
+}
+
+#[test]
+fn sync_respects_time_scope_and_reports_scope() {
+    let tmp = tempdir().unwrap();
+    let _ = common::write_fixture_sessions(tmp.path());
+    let index_dir = tmp.path().join("index");
+    let sessions_dir = tmp.path().join("sessions");
+
+    let output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "sync",
+            "--since",
+            "2026-04-12T10:30:00Z",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["scope"]["since"], "2026-04-12T10:30:00Z");
+    assert_eq!(json["scope"]["candidate_files"], 1);
+    assert_eq!(json["preflight"]["total_files"], 1);
+    assert_eq!(json["stats"]["indexed_files"], 1);
+    assert_eq!(json["stats"]["threads"], 1);
+}
+
+#[test]
+fn sync_respects_path_scope_and_reports_scope() {
+    let tmp = tempdir().unwrap();
+    let _ = common::write_fixture_sessions(tmp.path());
+    let index_dir = tmp.path().join("index");
+    let sessions_dir = tmp.path().join("sessions");
+
+    let output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "sync",
+            "--path",
+            "session-beta",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["scope"]["path"], "session-beta");
+    assert_eq!(json["scope"]["candidate_files"], 1);
+    assert_eq!(json["preflight"]["total_files"], 1);
+    assert_eq!(json["stats"]["indexed_files"], 1);
+    assert_eq!(json["stats"]["threads"], 1);
+}
+
+#[test]
+fn sync_respects_recent_scope_and_reports_scope() {
+    let tmp = tempdir().unwrap();
+    let _ = common::write_fixture_sessions(tmp.path());
+    let index_dir = tmp.path().join("index");
+    let sessions_dir = tmp.path().join("sessions");
+
+    let output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "sync",
+            "--recent",
+            "1",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["scope"]["recent"], 1);
+    assert_eq!(json["scope"]["candidate_files"], 1);
+    assert_eq!(json["preflight"]["total_files"], 1);
+    assert_eq!(json["stats"]["indexed_files"], 1);
+    assert_eq!(json["stats"]["threads"], 1);
+}
+
+#[test]
+fn sync_text_output_reports_scope_summary() {
+    let tmp = tempdir().unwrap();
+    let _ = common::write_fixture_sessions(tmp.path());
+    let index_dir = tmp.path().join("index");
+    let sessions_dir = tmp.path().join("sessions");
+
+    Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "sync",
+            "--path",
+            "session-beta",
+            "--recent",
+            "1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("同步范围"))
+        .stdout(predicates::str::contains("路径过滤: session-beta"))
+        .stdout(predicates::str::contains("最近活跃: 最近 1 个文件"))
+        .stdout(predicates::str::contains("候选文件: 1"));
+}
+
+#[test]
+fn scoped_sync_does_not_prune_out_of_scope_history() {
+    let tmp = tempdir().unwrap();
+    let (alpha_path, _) = common::write_fixture_sessions(tmp.path());
+    let index_dir = tmp.path().join("index");
+    let sessions_dir = tmp.path().join("sessions");
+
+    Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "sync",
+        ])
+        .assert()
+        .success();
+
+    std::fs::remove_file(&alpha_path).unwrap();
+
+    let output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "sync",
+            "--path",
+            "session-beta",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["scope"]["path"], "session-beta");
+    assert_eq!(json["stats"]["removed_files"], 0);
+    assert_eq!(json["stats"]["threads"], 2);
 }
