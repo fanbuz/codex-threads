@@ -16,6 +16,14 @@ pub struct Cli {
     #[arg(
         long,
         global = true,
+        value_name = "FEATURES",
+        help = "显式开启实验能力，多个 feature 使用逗号分隔"
+    )]
+    pub enable_experimentals: Option<String>,
+
+    #[arg(
+        long,
+        global = true,
         value_name = "PATH",
         help = "会话目录，默认 ~/.codex/sessions"
     )]
@@ -44,6 +52,11 @@ pub enum Command {
     Status,
     #[command(about = "检查索引健康状态，并可选择修复安全问题")]
     Doctor(DoctorArgs),
+    #[command(about = "实验性能力，默认关闭，需显式开启")]
+    Experimental {
+        #[command(subcommand)]
+        command: ExperimentalCommand,
+    },
     #[command(about = "搜索和读取线程")]
     Threads {
         #[command(subcommand)]
@@ -97,6 +110,29 @@ pub struct SyncArgs {
 pub struct DoctorArgs {
     #[arg(long, help = "清理可安全修复的本地状态文件问题")]
     pub repair: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ExperimentalCommand {
+    #[command(
+        about = "将指定线程恢复到 Codex App 本地线程视图",
+        after_help = "这是实验性桥接能力。请优先在 Codex App 已退出的前提下执行，并配合 --enable-experimentals restore-app-thread 使用。"
+    )]
+    RestoreAppThread(RestoreAppThreadArgs),
+}
+
+#[derive(Debug, Args, Clone)]
+pub struct RestoreAppThreadArgs {
+    pub thread_id: String,
+
+    #[arg(long, value_name = "PATH", help = "Codex 本地目录，默认 ~/.codex")]
+    pub codex_home: Option<PathBuf>,
+
+    #[arg(long, help = "同时把线程加入 pinned-thread-ids")]
+    pub pin: bool,
+
+    #[arg(long, help = "只输出恢复计划，不写入本地状态")]
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Subcommand)]

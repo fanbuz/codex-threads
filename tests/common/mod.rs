@@ -3,6 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use rusqlite::Connection;
 use serde_json::json;
 
 pub fn write_fixture_sessions(root: &Path) -> (PathBuf, PathBuf) {
@@ -122,6 +123,98 @@ pub fn write_invalid_refresh_state(index_dir: &Path) -> PathBuf {
     let path = index_dir.join("sync.refresh.json");
     fs::write(&path, "{not-json").unwrap();
     path
+}
+
+#[derive(Debug)]
+pub struct AppThreadRow {
+    pub id: String,
+    pub rollout_path: String,
+    pub title: String,
+    pub archived: i64,
+}
+
+#[allow(dead_code)]
+pub fn write_codex_app_state(codex_home: &Path) -> (PathBuf, PathBuf) {
+    fs::create_dir_all(codex_home).unwrap();
+
+    let state_db_path = codex_home.join("state_5.sqlite");
+    let conn = Connection::open(&state_db_path).unwrap();
+    conn.execute_batch(
+        r#"
+        CREATE TABLE threads (
+            id TEXT PRIMARY KEY,
+            rollout_path TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            source TEXT NOT NULL,
+            model_provider TEXT NOT NULL,
+            cwd TEXT NOT NULL,
+            title TEXT NOT NULL,
+            sandbox_policy TEXT NOT NULL,
+            approval_mode TEXT NOT NULL,
+            tokens_used INTEGER NOT NULL DEFAULT 0,
+            has_user_event INTEGER NOT NULL DEFAULT 0,
+            archived INTEGER NOT NULL DEFAULT 0,
+            archived_at INTEGER,
+            git_sha TEXT,
+            git_branch TEXT,
+            git_origin_url TEXT,
+            cli_version TEXT NOT NULL DEFAULT '',
+            first_user_message TEXT NOT NULL DEFAULT '',
+            agent_nickname TEXT,
+            agent_role TEXT,
+            memory_mode TEXT NOT NULL DEFAULT 'enabled',
+            model TEXT,
+            reasoning_effort TEXT,
+            agent_path TEXT
+        );
+        "#,
+    )
+    .unwrap();
+
+    let global_state_path = codex_home.join(".codex-global-state.json");
+    fs::write(
+        &global_state_path,
+        serde_json::to_vec_pretty(&json!({
+            "pinned-thread-ids": ["already-pinned"]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    (state_db_path, global_state_path)
+}
+
+#[allow(dead_code)]
+pub fn read_app_thread_row(state_db_path: &Path, id: &str) -> Option<AppThreadRow> {
+    let conn = Connection::open(state_db_path).unwrap();
+    conn.query_row(
+        "SELECT id, rollout_path, title, archived FROM threads WHERE id = ?1",
+        [id],
+        |row| {
+            Ok(AppThreadRow {
+                id: row.get(0)?,
+                rollout_path: row.get(1)?,
+                title: row.get(2)?,
+                archived: row.get(3)?,
+            })
+        },
+    )
+    .ok()
+}
+
+#[allow(dead_code)]
+pub fn read_pinned_thread_ids(global_state_path: &Path) -> Vec<String> {
+    let raw = fs::read_to_string(global_state_path).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    value
+        .get("pinned-thread-ids")
+        .and_then(serde_json::Value::as_array)
+        .unwrap()
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 fn alpha_session() -> String {

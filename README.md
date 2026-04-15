@@ -24,6 +24,7 @@
 - 增量扫描 `~/.codex/sessions`
 - 索引健康检查与安全修复入口
 - 线程、消息、事件三类搜索与读取接口
+- 支持跟随正式版本一起发布、但默认关闭的实验能力
 - 默认提供便于直接阅读的命令行输出，以及 `--json` 结构化输出
 - 除 `status` / `help` / `--version` 外，命令会附带耗时统计
 - SQLite 全文索引优先，必要时回退到普通搜索
@@ -187,6 +188,7 @@ codex-threads --json sync --cooldown 45m
 codex-threads sync --force
 codex-threads doctor
 codex-threads doctor --repair
+codex-threads --enable-experimentals restore-app-thread experimental restore-app-thread <thread-id> --dry-run
 codex-threads messages search "build a CLI" --limit 20
 codex-threads events search "agent_reasoning" --limit 20
 codex-threads --json threads search "websocket reconnect"
@@ -199,8 +201,18 @@ codex-threads status
 全局参数：
 
 - `--json` 输出纯 JSON
+- `--enable-experimentals FEATURES` 显式开启当前命令需要使用的实验能力，多个 feature 用逗号分隔
 - `--sessions-dir PATH` 覆盖默认会话目录
 - `--index-dir PATH` 覆盖默认索引目录
+
+实验能力：
+
+- 统一通过 `--enable-experimentals <feature1>,<feature2>` 开启，默认关闭
+- 这类开关只对当前命令生效，不会写入长期状态
+- 当前首个实验能力是 `restore-app-thread`
+- `experimental restore-app-thread <thread-id>` 会读取本地原始 session，并尝试把指定线程恢复到 Codex App 本地线程视图
+- 建议先用 `--dry-run` 看恢复计划，再决定是否实际写入
+- 这类桥接命令默认假设 Codex App 已退出，并会在写入前自动创建备份目录
 
 `sync` 范围参数：
 
