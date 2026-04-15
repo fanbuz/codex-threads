@@ -265,6 +265,8 @@ codex-threads --json events search "agent" --event-type agent_reasoning --until 
 
 ### `restore-app-thread`
 
+![跟随版本 0.0.5](https://img.shields.io/badge/%E8%B7%9F%E9%9A%8F%E7%89%88%E6%9C%AC-0.0.5-0A7F5A)
+
 风险级别：`高`
 
 > [!WARNING]
