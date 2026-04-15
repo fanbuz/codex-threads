@@ -188,7 +188,6 @@ codex-threads --json sync --cooldown 45m
 codex-threads sync --force
 codex-threads doctor
 codex-threads doctor --repair
-codex-threads --enable-experimentals restore-app-thread experimental restore-app-thread <thread-id> --dry-run
 codex-threads messages search "build a CLI" --limit 20
 codex-threads events search "agent_reasoning" --limit 20
 codex-threads --json threads search "websocket reconnect"
@@ -201,18 +200,8 @@ codex-threads status
 全局参数：
 
 - `--json` 输出纯 JSON
-- `--enable-experimentals FEATURES` 显式开启当前命令需要使用的实验能力，多个 feature 用逗号分隔
 - `--sessions-dir PATH` 覆盖默认会话目录
 - `--index-dir PATH` 覆盖默认索引目录
-
-实验能力：
-
-- 统一通过 `--enable-experimentals <feature1>,<feature2>` 开启，默认关闭
-- 这类开关只对当前命令生效，不会写入长期状态
-- 当前首个实验能力是 `restore-app-thread`
-- `experimental restore-app-thread <thread-id>` 会读取本地原始 session，并尝试把指定线程恢复到 Codex App 本地线程视图
-- 建议先用 `--dry-run` 看恢复计划，再决定是否实际写入
-- 这类桥接命令默认假设 Codex App 已退出，并会在写入前自动创建备份目录
 
 `sync` 范围参数：
 
@@ -250,6 +239,50 @@ codex-threads --json events search "agent" --event-type agent_reasoning --until 
 - `--json` 输出会额外回显本次命中的 `filters`，方便脚本和 agent 继续处理
 - `--json` 搜索结果还会补充 `search` 元信息，说明这次命中走的是 `fts` 还是 `like`、是否进入 expanded 查询，以及当前排序口径
 - 每条搜索结果会带上 `explain`，用来说明命中了哪些字段、覆盖了多少 query term、是否保留了原始字面量命中
+
+## 实验能力
+
+实验能力会跟随正式版本一起发布，但默认关闭，需要在当前命令里显式开启。
+
+> [!WARNING]
+> 当前实验能力里，`restore-app-thread` 的风险级别评估为`高`。
+> 它会直接修改 Codex App 私有本地状态，例如 `state_5.sqlite`，以及在启用 `--pin` 时修改 `.codex-global-state.json`。
+> 这类状态没有稳定公开接口，可能受应用版本、schema 变化和运行中写回影响。建议只在 Codex App 已退出、已完成备份、明确知道恢复目标时使用。
+
+开启规则：
+
+- 统一使用 `--enable-experimentals <feature1>,<feature2>`
+- 这类开关只对当前命令生效，不会写入长期状态
+- 当前只接受白名单 feature 名，不支持未知值、空项或隐式放行
+
+风险分级参考：
+
+- `低`：只读、只解释、或纯 `--dry-run` 的实验能力
+- `中`：只修改 `codex-threads` 自己维护的本地状态
+- `高`：会改写其他工具或应用的私有本地状态
+
+当前实验能力：
+
+- `restore-app-thread`
+  - 风险级别：`高`
+  - 读取本地原始 session，并尝试把指定线程恢复到 Codex App 本地线程视图
+  - 支持 `--dry-run` 先看恢复计划
+  - 支持 `--pin` 同步把线程加入 `pinned-thread-ids`
+  - 默认假设 Codex App 已退出，并会在写入前自动创建备份目录
+
+示例：
+
+```bash
+codex-threads \
+  --enable-experimentals restore-app-thread \
+  experimental restore-app-thread <thread-id> \
+  --dry-run
+
+codex-threads \
+  --enable-experimentals restore-app-thread \
+  experimental restore-app-thread <thread-id> \
+  --pin
+```
 
 输出约定：
 
