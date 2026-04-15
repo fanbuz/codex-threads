@@ -244,11 +244,6 @@ codex-threads --json events search "agent" --event-type agent_reasoning --until 
 
 实验能力会跟随正式版本一起发布，但默认关闭，需要在当前命令里显式开启。
 
-> [!WARNING]
-> 当前实验能力里，`restore-app-thread` 的风险级别评估为`高`。
-> 它会直接修改 Codex App 私有本地状态，例如 `state_5.sqlite`，以及在启用 `--pin` 时修改 `.codex-global-state.json`。
-> 这类状态没有稳定公开接口，可能受应用版本、schema 变化和运行中写回影响。建议只在 Codex App 已退出、已完成备份、明确知道恢复目标时使用。
-
 开启规则：
 
 - 统一使用 `--enable-experimentals <feature1>,<feature2>`
@@ -261,14 +256,25 @@ codex-threads --json events search "agent" --event-type agent_reasoning --until 
 - `中`：只修改 `codex-threads` 自己维护的本地状态
 - `高`：会改写其他工具或应用的私有本地状态
 
+评估要求：
+
+- 每新增一个实验能力，都需要单独评估风险级别
+- 风险提示写在对应能力区块，不使用一段全局结论覆盖所有实验能力
+
 当前实验能力：
 
-- `restore-app-thread`
-  - 风险级别：`高`
-  - 读取本地原始 session，并尝试把指定线程恢复到 Codex App 本地线程视图
-  - 支持 `--dry-run` 先看恢复计划
-  - 支持 `--pin` 同步把线程加入 `pinned-thread-ids`
-  - 默认假设 Codex App 已退出，并会在写入前自动创建备份目录
+### `restore-app-thread`
+
+风险级别：`高`
+
+> [!WARNING]
+> `restore-app-thread` 会直接修改 Codex App 私有本地状态，例如 `state_5.sqlite`，以及在启用 `--pin` 时修改 `.codex-global-state.json`。
+> 这类状态没有稳定公开接口，可能受应用版本、schema 变化和运行中写回影响。建议只在 Codex App 已退出、已完成备份、明确知道恢复目标时使用。
+
+- 读取本地原始 session，并尝试把指定线程恢复到 Codex App 本地线程视图
+- 支持 `--dry-run` 先看恢复计划
+- 支持 `--pin` 同步把线程加入 `pinned-thread-ids`
+- 默认假设 Codex App 已退出，并会在写入前自动创建备份目录
 
 示例：
 
