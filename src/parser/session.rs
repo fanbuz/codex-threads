@@ -140,7 +140,7 @@ impl SessionAccumulator {
                         .unwrap_or("unknown")
                         .to_string();
                     let text = extract_message_text(&payload);
-                    if !text.is_empty() {
+                    if !text.is_empty() && !should_skip_default_message(&role, &text) {
                         if role == "user" && self.first_user_message.is_none() {
                             self.first_user_message = Some(text.clone());
                         }
@@ -320,7 +320,7 @@ fn summarize_response_item(payload: &Value) -> String {
                 collect_text_fragments(summary, &mut parts);
             }
             if parts.is_empty() {
-                compact_json(payload)
+                String::new()
             } else {
                 normalize_text(parts.join(" "))
             }
@@ -438,6 +438,18 @@ fn shorten(text: &str) -> String {
 
 fn normalize_text(text: String) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn should_skip_default_message(role: &str, text: &str) -> bool {
+    matches!(role, "developer" | "system") || looks_like_injected_context(text)
+}
+
+fn looks_like_injected_context(text: &str) -> bool {
+    let text = text.trim();
+    text.starts_with("# AGENTS.md instructions")
+        || text.starts_with("<permissions instructions>")
+        || text.starts_with("<environment_context>")
+        || text.starts_with("<collaboration_mode>")
 }
 
 fn compact_json(value: &Value) -> String {
