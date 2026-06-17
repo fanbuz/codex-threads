@@ -8,7 +8,7 @@ fn top_level_help_shows_command_descriptions() {
         .arg("--help")
         .assert()
         .success()
-        .stdout(predicate::str::contains("CLI 版本: 0.0.4"))
+        .stdout(predicate::str::contains("CLI 版本: 0.0.6"))
         .stdout(predicate::str::contains(
             "--enable-experimentals <FEATURES>",
         ))

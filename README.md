@@ -1,11 +1,11 @@
 # codex-threads
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
-[![Version: 0.0.4](https://img.shields.io/badge/version-0.0.4-blue.svg)](./Cargo.toml)
+[![Version: 0.0.6](https://img.shields.io/badge/version-0.0.6-blue.svg)](./Cargo.toml)
 
 `codex-threads` 是一个轻量 Rust CLI，用来把 `~/.codex/sessions` 下的历史 Codex 会话整理成可搜索、可读取的本地索引。
 
-当前版本：`0.0.4`
+当前版本：`0.0.6`
 
 它面向两类使用方式：
 
@@ -276,7 +276,7 @@ codex-threads --json events search "agent" --event-type agent_reasoning --until 
 
 ### `restore-app-thread`
 
-![跟随版本 0.0.5](https://img.shields.io/badge/%E8%B7%9F%E9%9A%8F%E7%89%88%E6%9C%AC-0.0.5-0A7F5A)
+![跟随版本 0.0.6](https://img.shields.io/badge/%E8%B7%9F%E9%9A%8F%E7%89%88%E6%9C%AC-0.0.6-0A7F5A)
 
 风险级别：`高`
 
