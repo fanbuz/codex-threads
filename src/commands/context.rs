@@ -55,7 +55,9 @@ pub fn thread(store: &Store, args: &ContextArgs) -> Result<Rendered> {
 }
 
 fn render_context(context: &ThreadContextRead, budget: usize, include_events: bool) -> String {
-    let mut builder = BudgetedText::new(budget);
+    let resume_pointers = render_resume_pointers(&context.thread.session_id);
+    let content_budget = budget.saturating_sub(resume_pointers.len()).max(1);
+    let mut builder = BudgetedText::new(content_budget);
     builder.push("# Codex Thread Context\n");
     builder.push(&format!(
         "- session_id: {}\n- title: {}\n",
@@ -91,16 +93,19 @@ fn render_context(context: &ThreadContextRead, budget: usize, include_events: bo
         }
     }
 
-    builder.push("\n## Resume Pointers\n");
-    builder.push(&format!(
-        "- Read full thread: codex-threads threads read {} --limit 20\n",
-        context.thread.session_id
-    ));
-    builder.push(&format!(
-        "- Read event trail: codex-threads events read {} --limit 20\n",
-        context.thread.session_id
-    ));
-    builder.finish()
+    let mut text = builder.finish();
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(&resume_pointers);
+    text
+}
+
+fn render_resume_pointers(session_id: &str) -> String {
+    format!(
+        "\n## Resume Pointers\n- Read full thread: codex-threads threads read {} --limit 20\n- Read event trail: codex-threads events read {} --limit 20\n",
+        session_id, session_id
+    )
 }
 
 struct BudgetedText {

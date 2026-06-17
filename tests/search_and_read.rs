@@ -801,3 +801,37 @@ fn threads_context_can_omit_events() {
         .unwrap()
         .contains("## Recent Messages"));
 }
+
+#[test]
+fn threads_context_keeps_resume_pointers_with_tight_budget() {
+    let (_tmp, sessions_dir, index_dir) = seed_index();
+
+    let output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "threads",
+            "context",
+            "session-alpha",
+            "--budget",
+            "650",
+            "--messages",
+            "3",
+            "--events",
+            "20",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let text = String::from_utf8(output).unwrap();
+    assert!(text.len() <= 750);
+    assert!(text.contains("## Resume Pointers"));
+    assert!(text.contains("codex-threads threads read session-alpha --limit 20"));
+    assert!(text.contains("codex-threads events read session-alpha --limit 20"));
+}
