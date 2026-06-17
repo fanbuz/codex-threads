@@ -278,3 +278,10 @@ pub struct ThreadRead {
     pub thread: ThreadRecord,
     pub messages: Vec<MessageRecord>,
 }
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ThreadContextRead {
+    pub thread: ThreadRecord,
+    pub messages: Vec<MessageRecord>,
+    pub events: Vec<EventRecord>,
+}

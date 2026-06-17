@@ -173,6 +173,7 @@ codex-threads --json doctor
 codex-threads --json messages search "build a CLI" --limit 10
 codex-threads --json events search "agent_reasoning" --limit 10
 codex-threads --json threads read <session-id> --limit 20
+codex-threads threads context <session-id> --budget 4000
 ```
 
 ## 命令
@@ -192,6 +193,7 @@ codex-threads messages search "build a CLI" --limit 20
 codex-threads events search "agent_reasoning" --limit 20
 codex-threads --json threads search "websocket reconnect"
 codex-threads threads read session-alpha --limit 20
+codex-threads threads context session-alpha --budget 4000
 codex-threads messages read <session-id> --limit 50
 codex-threads events read <session-id> --limit 50
 codex-threads status
@@ -239,6 +241,15 @@ codex-threads --json events search "agent" --event-type agent_reasoning --until 
 - `--json` 输出会额外回显本次命中的 `filters`，方便脚本和 agent 继续处理
 - `--json` 搜索结果还会补充 `search` 元信息，说明这次命中走的是 `fts` 还是 `like`、是否进入 expanded 查询，以及当前排序口径
 - 每条搜索结果会带上 `explain`，用来说明命中了哪些字段、覆盖了多少 query term、是否保留了原始字面量命中
+
+`threads context` 用于给新会话生成可控长度的接续上下文包：
+
+- `--budget N` 控制输出字符预算，默认 `4000`
+- `--messages N` 最多纳入最近 N 条消息，默认 `20`
+- `--events N` 最多纳入 N 条事件证据，默认 `20`
+- `--no-events` 不纳入事件证据，只输出线程元信息和最近消息
+- 默认会优先保留 `function_call` / `function_call_output` 等执行证据，再补充最近事件
+- 这是确定性抽取，不调用 LLM；如果需要完整原文，继续使用 `threads read`、`messages read` 或 `events read`
 
 ## 实验能力
 

@@ -1,3 +1,4 @@
+mod context;
 mod doctor;
 mod experimental;
 mod read;
@@ -43,6 +44,10 @@ pub fn run(cli: Cli) -> Result<Rendered> {
             ThreadsCommand::Read(args) => run_with_timing(|| {
                 let store = Store::open(&index_dir)?;
                 read::thread(&store, &args.session_id, args.limit)
+            }),
+            ThreadsCommand::Context(args) => run_with_timing(|| {
+                let store = Store::open(&index_dir)?;
+                context::thread(&store, &args)
             }),
         },
         Command::Messages { command } => match command {
