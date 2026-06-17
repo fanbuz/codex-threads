@@ -11,6 +11,6 @@ pub use types::{
     DoctorIssue, DoctorRepairAction, DoctorReport, EventRecord, EventSearchFilters, EventSearchHit,
     MessageRecord, MessageSearchFilters, MessageSearchHit, StatusSummary, SyncCooldown,
     SyncCooldownPolicy, SyncFailure, SyncLockStatus, SyncPlan, SyncPreflight, SyncReport,
-    SyncRequest, SyncResume, SyncScope, SyncStats, ThreadRead, ThreadRecord, ThreadSearchFilters,
-    ThreadSearchHit,
+    SyncRequest, SyncResume, SyncScope, SyncStats, ThreadContextRead, ThreadRead, ThreadRecord,
+    ThreadSearchFilters, ThreadSearchHit,
 };

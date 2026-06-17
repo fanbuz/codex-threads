@@ -141,6 +141,8 @@ pub enum ThreadsCommand {
     Search(ThreadSearchArgs),
     #[command(about = "读取指定线程")]
     Read(ReadArgs),
+    #[command(about = "生成接续新会话的预算化上下文包")]
+    Context(ContextArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -212,4 +214,21 @@ pub struct ReadArgs {
 
     #[arg(long, help = "只读取最近 N 条记录")]
     pub limit: Option<usize>,
+}
+
+#[derive(Debug, Args, Clone)]
+pub struct ContextArgs {
+    pub session_id: String,
+
+    #[arg(long, default_value_t = 4000, help = "上下文包最大字符预算")]
+    pub budget: usize,
+
+    #[arg(long, default_value_t = 20, help = "最多纳入最近 N 条消息")]
+    pub messages: usize,
+
+    #[arg(long, default_value_t = 20, help = "最多纳入最近 N 条事件")]
+    pub events: usize,
+
+    #[arg(long, help = "不纳入执行事件证据")]
+    pub no_events: bool,
 }

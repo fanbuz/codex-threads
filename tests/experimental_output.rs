@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::Path;
 
 use assert_cmd::Command;
@@ -128,6 +129,63 @@ fn restore_app_thread_dry_run_reports_changes_without_writing() {
     assert_eq!(
         common::read_pinned_thread_ids(&global_state_path),
         vec!["already-pinned".to_string()]
+    );
+}
+
+#[test]
+fn restore_app_thread_prefers_filename_match_before_full_parse() {
+    let tmp = tempdir().unwrap();
+    let old_dir = tmp
+        .path()
+        .join("sessions")
+        .join("2026")
+        .join("04")
+        .join("11");
+    fs::create_dir_all(&old_dir).unwrap();
+    let stale_path = old_dir.join("aaa-stale-copy.jsonl");
+    fs::write(
+        &stale_path,
+        [
+            r#"{"timestamp":"2026-04-11T10:00:00Z","type":"session_meta","payload":{"id":"session-alpha","timestamp":"2026-04-11T10:00:00Z","cwd":"/workspace/stale-repo"}}"#,
+            r#"{"timestamp":"2026-04-11T10:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"stale copy should not win"}]}}"#,
+        ]
+        .join("\n"),
+    )
+    .unwrap();
+    let (alpha_path, _) = common::write_fixture_sessions(tmp.path());
+    let codex_home = tmp.path().join("codex-home");
+    let _ = common::write_codex_app_state(&codex_home);
+    let sessions_dir = tmp.path().join("sessions");
+
+    let output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--enable-experimentals",
+            "restore-app-thread",
+            "experimental",
+            "restore-app-thread",
+            "session-alpha",
+            "--codex-home",
+            codex_home.to_str().unwrap(),
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        json["experimental"]["thread"]["rollout_path"],
+        alpha_path.to_string_lossy().to_string()
+    );
+    assert_ne!(
+        json["experimental"]["thread"]["rollout_path"],
+        stale_path.to_string_lossy().to_string()
     );
 }
 

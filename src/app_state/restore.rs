@@ -127,25 +127,32 @@ fn find_session(sessions_dir: &Path, thread_id: &str) -> Result<SessionMatch> {
         bail!("会话目录不存在: {}", sessions_dir.display());
     }
 
-    for entry in WalkDir::new(sessions_dir)
+    let mut files = WalkDir::new(sessions_dir)
         .into_iter()
         .filter_map(Result::ok)
         .filter(|entry| entry.file_type().is_file())
-    {
-        let path = entry.path();
-        if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
-            continue;
-        }
+        .map(|entry| entry.into_path())
+        .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("jsonl"))
+        .collect::<Vec<_>>();
+    files.sort();
 
-        let Ok(parsed) = parse_session_file(path) else {
-            continue;
-        };
-        if parsed.session_id == thread_id {
-            return Ok(SessionMatch {
-                path: path.to_path_buf(),
-                parsed,
-            });
+    let filename_matches = files
+        .iter()
+        .filter(|path| {
+            path.file_name()
+                .and_then(|value| value.to_str())
+                .is_some_and(|name| name.contains(thread_id))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if !filename_matches.is_empty() {
+        if let Some(session_match) = find_session_in_files(&filename_matches, thread_id) {
+            return Ok(session_match);
         }
+    }
+
+    if let Some(session_match) = find_session_in_files(&files, thread_id) {
+        return Ok(session_match);
     }
 
     bail!(
@@ -153,6 +160,21 @@ fn find_session(sessions_dir: &Path, thread_id: &str) -> Result<SessionMatch> {
         sessions_dir.display(),
         thread_id
     )
+}
+
+fn find_session_in_files(files: &[PathBuf], thread_id: &str) -> Option<SessionMatch> {
+    for path in files {
+        let Ok(parsed) = parse_session_file(path) else {
+            continue;
+        };
+        if parsed.session_id == thread_id {
+            return Some(SessionMatch {
+                path: path.to_path_buf(),
+                parsed,
+            });
+        }
+    }
+    None
 }
 
 fn build_thread_record(thread_id: &str, session_match: &SessionMatch) -> Result<RestoredAppThread> {

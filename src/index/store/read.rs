@@ -1,7 +1,9 @@
 use anyhow::{anyhow, bail, Result};
 use rusqlite::{params, OptionalExtension};
 
-use super::super::types::{EventRecord, MessageRecord, ThreadRead, ThreadRecord};
+use super::super::types::{
+    EventRecord, MessageRecord, ThreadContextRead, ThreadRead, ThreadRecord,
+};
 use super::Store;
 
 impl Store {
@@ -12,6 +14,35 @@ impl Store {
             .ok_or_else(|| anyhow!("未找到线程: {}", identifier))?;
         let messages = self.read_messages_by_session(&session_id, limit)?;
         Ok(ThreadRead { thread, messages })
+    }
+
+    pub fn read_thread_context(
+        &self,
+        identifier: &str,
+        message_limit: Option<usize>,
+        event_limit: Option<usize>,
+    ) -> Result<ThreadContextRead> {
+        let session_id = self.resolve_session_id(identifier)?;
+        let thread = self
+            .load_thread(&session_id)?
+            .ok_or_else(|| anyhow!("未找到线程: {}", identifier))?;
+        let messages = self.read_messages_by_session(&session_id, message_limit)?;
+        let events = match event_limit {
+            Some(0) => Vec::new(),
+            Some(limit) => {
+                select_context_events(self.read_events_by_session(&session_id, None)?, limit)
+            }
+            None => self
+                .read_events_by_session(&session_id, None)?
+                .into_iter()
+                .filter(|event| !event.summary.trim().is_empty())
+                .collect(),
+        };
+        Ok(ThreadContextRead {
+            thread,
+            messages,
+            events,
+        })
     }
 
     pub fn read_messages(
@@ -188,4 +219,50 @@ impl Store {
                 .map_err(Into::into)
         }
     }
+}
+
+fn select_context_events(events: Vec<EventRecord>, limit: usize) -> Vec<EventRecord> {
+    let filtered = events
+        .into_iter()
+        .enumerate()
+        .filter(|(_, event)| !event.summary.trim().is_empty())
+        .collect::<Vec<_>>();
+    if filtered.len() <= limit {
+        return filtered.into_iter().map(|(_, event)| event).collect();
+    }
+
+    let mut selected_indexes = Vec::new();
+    for (idx, event) in filtered.iter().rev() {
+        if is_execution_evidence(event) {
+            selected_indexes.push(*idx);
+            if selected_indexes.len() == limit {
+                break;
+            }
+        }
+    }
+
+    if selected_indexes.len() < limit {
+        for (idx, _) in filtered.iter().rev() {
+            if !selected_indexes.contains(idx) {
+                selected_indexes.push(*idx);
+                if selected_indexes.len() == limit {
+                    break;
+                }
+            }
+        }
+    }
+
+    selected_indexes.sort_unstable();
+    filtered
+        .into_iter()
+        .filter(|(idx, _)| selected_indexes.binary_search(idx).is_ok())
+        .map(|(_, event)| event)
+        .collect()
+}
+
+fn is_execution_evidence(event: &EventRecord) -> bool {
+    matches!(
+        event.event_type.as_str(),
+        "function_call" | "function_call_output"
+    ) || event.event_type.contains("tool")
 }

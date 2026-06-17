@@ -688,3 +688,150 @@ fn thread_message_and_event_reads_honor_limits() {
         .is_some());
     assert_eq!(events_json["count"], 3);
 }
+
+#[test]
+fn threads_context_outputs_budgeted_handoff() {
+    let (_tmp, sessions_dir, index_dir) = seed_index();
+
+    let output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "threads",
+            "context",
+            "session-alpha",
+            "--budget",
+            "900",
+            "--messages",
+            "3",
+            "--events",
+            "3",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let text = String::from_utf8(output).unwrap();
+    assert!(text.len() <= 1100);
+    assert!(text.contains("# Codex Thread Context"));
+    assert!(text.contains("session-alpha"));
+    assert!(text.contains("## Recent Messages"));
+    assert!(text.contains("Please build a CLI for thread search"));
+    assert!(text.contains("## Execution Evidence"));
+    assert!(text.contains("function_call"));
+    assert!(text.contains("agent_reasoning"));
+    assert!(text.contains("## Resume Pointers"));
+
+    let json_output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "threads",
+            "context",
+            "session-alpha",
+            "--budget",
+            "900",
+            "--messages",
+            "3",
+            "--events",
+            "3",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: Value = serde_json::from_slice(&json_output).unwrap();
+    assert_eq!(json["command"], "threads.context");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["thread"]["session_id"], "session-alpha");
+    assert!(json["budget"]["used"].as_u64().unwrap() <= json["budget"]["limit"].as_u64().unwrap());
+    assert!(!json["messages"].as_array().unwrap().is_empty());
+    assert!(!json["events"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn threads_context_can_omit_events() {
+    let (_tmp, sessions_dir, index_dir) = seed_index();
+
+    let output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "threads",
+            "context",
+            "session-alpha",
+            "--budget",
+            "900",
+            "--messages",
+            "2",
+            "--events",
+            "3",
+            "--no-events",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["command"], "threads.context");
+    assert!(json["events"].as_array().unwrap().is_empty());
+    assert!(!json["text"]
+        .as_str()
+        .unwrap()
+        .contains("## Execution Evidence"));
+    assert!(json["text"]
+        .as_str()
+        .unwrap()
+        .contains("## Recent Messages"));
+}
+
+#[test]
+fn threads_context_keeps_resume_pointers_with_tight_budget() {
+    let (_tmp, sessions_dir, index_dir) = seed_index();
+
+    let output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "threads",
+            "context",
+            "session-alpha",
+            "--budget",
+            "650",
+            "--messages",
+            "3",
+            "--events",
+            "20",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let text = String::from_utf8(output).unwrap();
+    assert!(text.len() <= 750);
+    assert!(text.contains("## Resume Pointers"));
+    assert!(text.contains("codex-threads threads read session-alpha --limit 20"));
+    assert!(text.contains("codex-threads events read session-alpha --limit 20"));
+}

@@ -33,10 +33,13 @@ fn nested_help_shows_subcommand_descriptions() {
         .args(["threads", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains(
-            "search  按标题、路径和聚合内容搜索线程",
-        ))
-        .stdout(predicate::str::contains("read    读取指定线程"));
+        .stdout(
+            predicate::str::is_match(r"(?m)^\s*search\s+按标题、路径和聚合内容搜索线程$").unwrap(),
+        )
+        .stdout(predicate::str::is_match(r"(?m)^\s*read\s+读取指定线程$").unwrap())
+        .stdout(
+            predicate::str::is_match(r"(?m)^\s*context\s+生成接续新会话的预算化上下文包$").unwrap(),
+        );
 
     Command::cargo_bin("codex-threads")
         .unwrap()
