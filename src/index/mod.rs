@@ -9,8 +9,8 @@ pub use search_meta::{SearchBackend, SearchExplain, SearchMeta, SearchQueryMode,
 pub use store::Store;
 pub use types::{
     DoctorIssue, DoctorRepairAction, DoctorReport, EventRecord, EventSearchFilters, EventSearchHit,
-    MessageRecord, MessageSearchFilters, MessageSearchHit, StatusSummary, SyncCooldown,
-    SyncCooldownPolicy, SyncFailure, SyncLockStatus, SyncPlan, SyncPreflight, SyncReport,
-    SyncRequest, SyncResume, SyncScope, SyncStats, ThreadContextRead, ThreadRead, ThreadRecord,
-    ThreadSearchFilters, ThreadSearchHit,
+    LocalSessionSource, MessageRecord, MessageSearchFilters, MessageSearchHit, NativeThreadHandoff,
+    StatusSummary, SyncCooldown, SyncCooldownPolicy, SyncFailure, SyncLockStatus, SyncPlan,
+    SyncPreflight, SyncReport, SyncRequest, SyncResume, SyncScope, SyncStats, ThreadContextRead,
+    ThreadRead, ThreadRecord, ThreadSearchFilters, ThreadSearchHit,
 };

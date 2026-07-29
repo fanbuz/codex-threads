@@ -3,6 +3,43 @@ use serde::{Deserialize, Serialize};
 use super::search_meta::SearchExplain;
 
 #[derive(Debug, Clone, Serialize)]
+pub struct LocalSessionSource {
+    pub kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+impl LocalSessionSource {
+    pub(crate) fn new(path: Option<String>) -> Self {
+        Self {
+            kind: "local_codex_session",
+            path,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NativeThreadHandoff {
+    pub target: &'static str,
+    pub candidate_thread_id: String,
+    pub verification: &'static str,
+    pub recommended_action: &'static str,
+    pub local_fallback: String,
+}
+
+impl NativeThreadHandoff {
+    pub(crate) fn new(session_id: &str) -> Self {
+        Self {
+            target: "codex_native_threads",
+            candidate_thread_id: session_id.to_string(),
+            verification: "required",
+            recommended_action: "confirm_then_read",
+            local_fallback: format!("codex-threads threads read {} --limit 20", session_id),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct SyncStats {
     pub scanned_files: usize,
     pub indexed_files: usize,
@@ -160,6 +197,8 @@ pub struct SyncPlan {
 pub struct StatusSummary {
     pub index_path: String,
     pub fts_available: bool,
+    pub index_format_version: i64,
+    pub rebuild_required: bool,
     pub sync_lock: SyncLockStatus,
     pub files: usize,
     pub threads: usize,
@@ -191,6 +230,8 @@ pub struct ThreadSearchHit {
     pub event_count: usize,
     pub snippet: String,
     pub explain: SearchExplain,
+    pub source: LocalSessionSource,
+    pub handoff: NativeThreadHandoff,
     #[serde(skip_serializing)]
     pub aggregate_text: String,
     #[serde(skip_serializing)]
@@ -228,6 +269,8 @@ pub struct MessageSearchHit {
     pub text: String,
     pub snippet: String,
     pub explain: SearchExplain,
+    pub source: LocalSessionSource,
+    pub handoff: NativeThreadHandoff,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -259,6 +302,8 @@ pub struct EventSearchHit {
     pub summary: String,
     pub snippet: String,
     pub explain: SearchExplain,
+    pub source: LocalSessionSource,
+    pub handoff: NativeThreadHandoff,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]

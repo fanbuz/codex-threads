@@ -89,12 +89,26 @@ impl Store {
         self.scan_sync_lock(&mut issues, &mut repair_actions)?;
         self.scan_resume_state(&mut issues, &mut repair_actions)?;
         self.scan_refresh_state(&mut issues, &mut repair_actions)?;
+        self.scan_rebuild_required(&mut issues)?;
         self.scan_thread_count_drift(&mut issues)?;
 
         Ok(DoctorScan {
             issues,
             repair_actions,
         })
+    }
+
+    fn scan_rebuild_required(&self, issues: &mut Vec<DoctorIssue>) -> Result<()> {
+        if self.rebuild_required()? {
+            issues.push(DoctorIssue {
+                code: "index_rebuild_required".to_string(),
+                summary: "索引已升级到 0.1.0 格式，需要执行一次不带范围参数的 sync 完成全量重建"
+                    .to_string(),
+                repairable: false,
+                path: Some(self.status()?.index_path),
+            });
+        }
+        Ok(())
     }
 
     fn scan_sync_lock(
@@ -293,7 +307,9 @@ fn build_recommendation(issues: &[DoctorIssue]) -> String {
     let has_drift = issues.iter().any(|issue| {
         matches!(
             issue.code.as_str(),
-            "thread_message_count_mismatch" | "thread_event_count_mismatch"
+            "thread_message_count_mismatch"
+                | "thread_event_count_mismatch"
+                | "index_rebuild_required"
         )
     });
     let has_running_sync = issues.iter().any(|issue| issue.code == "sync_in_progress");

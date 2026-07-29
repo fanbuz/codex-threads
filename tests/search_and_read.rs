@@ -26,6 +26,22 @@ fn seed_index() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
     (tmp, sessions_dir, index_dir)
 }
 
+fn assert_native_handoff(value: &Value, session_id: &str) {
+    assert_eq!(value["source"]["kind"], "local_codex_session");
+    assert!(value["source"]["path"]
+        .as_str()
+        .unwrap()
+        .ends_with(".jsonl"));
+    assert_eq!(value["handoff"]["target"], "codex_native_threads");
+    assert_eq!(value["handoff"]["candidate_thread_id"], session_id);
+    assert_eq!(value["handoff"]["verification"], "required");
+    assert_eq!(value["handoff"]["recommended_action"], "confirm_then_read");
+    assert!(value["handoff"]["local_fallback"]
+        .as_str()
+        .unwrap()
+        .contains(session_id));
+}
+
 #[test]
 fn messages_search_returns_matching_snippets() {
     let (_tmp, sessions_dir, index_dir) = seed_index();
@@ -71,6 +87,7 @@ fn messages_search_returns_matching_snippets() {
     );
     assert_eq!(json["results"][0]["explain"]["matched_terms"], 3);
     assert_eq!(json["results"][0]["explain"]["literal_match"], true);
+    assert_native_handoff(&json["results"][0], "session-alpha");
 }
 
 #[test]
@@ -195,7 +212,7 @@ fn human_readable_messages_and_events_read_place_duration_after_count() {
     let events_text = String::from_utf8(events_output).unwrap();
     let event_lines = events_text.lines().collect::<Vec<_>>();
     assert_eq!(event_lines[0], "事件线程: session-alpha");
-    assert_eq!(event_lines[1], "返回条数: 3");
+    assert_eq!(event_lines[1], "返回条数: 2");
     assert!(event_lines[2].starts_with("耗时: "));
     assert!(event_lines[3].starts_with("- "));
 }
@@ -228,6 +245,37 @@ fn threads_search_uses_aggregate_content() {
     assert_eq!(json["command"], "threads.search");
     assert_eq!(json["count"], 1);
     assert_eq!(json["results"][0]["session_id"], "session-beta");
+    assert_native_handoff(&json["results"][0], "session-beta");
+}
+
+#[test]
+fn punctuation_query_stays_on_fts_instead_of_scanning_like() {
+    let (_tmp, sessions_dir, index_dir) = seed_index();
+
+    let output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "threads",
+            "search",
+            "alpha-repo",
+            "--limit",
+            "5",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["count"], 1);
+    assert_eq!(json["search"]["backend"], "fts");
+    assert_eq!(json["results"][0]["session_id"], "session-alpha");
 }
 
 #[test]
@@ -262,6 +310,7 @@ fn events_search_returns_matching_results() {
     assert_eq!(json["search"]["ranking"], "bm25");
     assert_eq!(json["results"][0]["session_id"], "session-beta");
     assert_eq!(json["results"][0]["event_type"], "agent_reasoning");
+    assert_native_handoff(&json["results"][0], "session-beta");
     assert_eq!(
         json["results"][0]["explain"]["matched_fields"],
         serde_json::json!(["event_type"])
@@ -686,7 +735,7 @@ fn thread_message_and_event_reads_honor_limits() {
         .get("duration_ms")
         .and_then(Value::as_u64)
         .is_some());
-    assert_eq!(events_json["count"], 3);
+    assert_eq!(events_json["count"], 2);
 }
 
 #[test]
@@ -755,6 +804,7 @@ fn threads_context_outputs_budgeted_handoff() {
     assert_eq!(json["command"], "threads.context");
     assert_eq!(json["ok"], true);
     assert_eq!(json["thread"]["session_id"], "session-alpha");
+    assert_native_handoff(&json, "session-alpha");
     assert!(json["budget"]["used"].as_u64().unwrap() <= json["budget"]["limit"].as_u64().unwrap());
     assert!(!json["messages"].as_array().unwrap().is_empty());
     assert!(!json["events"].as_array().unwrap().is_empty());

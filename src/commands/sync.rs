@@ -260,15 +260,16 @@ pub fn run(
     let mut sync_lock = store.acquire_sync_lock()?;
     sync_lock.heartbeat()?;
     let mut progress = SyncProgressReporter::new();
-    let mut progress_observer: Option<&mut dyn SyncProgressObserver> = Some(&mut progress);
-    let (plan, report) = store.run_sync(
-        sessions_dir,
-        &request,
-        &cooldown,
-        Some(&mut sync_lock),
-        &mut progress_observer,
-    )?;
-    drop(progress_observer);
+    let (plan, report) = {
+        let mut progress_observer: Option<&mut dyn SyncProgressObserver> = Some(&mut progress);
+        store.run_sync(
+            sessions_dir,
+            &request,
+            &cooldown,
+            Some(&mut sync_lock),
+            &mut progress_observer,
+        )?
+    };
     let progress = progress.into_summary();
     let response = SyncResponse {
         command: "sync",
@@ -493,7 +494,7 @@ fn render_tty_progress_line(
     let filled = if total_files == 0 {
         0
     } else {
-        ((processed_files.min(total_files) * width) + total_files - 1) / total_files
+        (processed_files.min(total_files) * width).div_ceil(total_files)
     };
     let bar = format!(
         "{}{}",
@@ -553,6 +554,15 @@ pub fn status(store: &Store) -> Result<Rendered> {
         format!("CLI 版本: {}", response.cli_version),
         format!("索引文件: {}", status.index_path),
         format!("FTS5 可用: {}", status.fts_available),
+        format!("索引格式版本: {}", status.index_format_version),
+        format!(
+            "需要全量重建: {}",
+            if status.rebuild_required {
+                "是"
+            } else {
+                "否"
+            }
+        ),
         format!("同步锁: {}", render_lock_state(&status.sync_lock)),
         format!("文件数: {}", status.files),
         format!("线程数: {}", status.threads),

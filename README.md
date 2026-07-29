@@ -1,20 +1,23 @@
 # codex-threads
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
-[![Version: 0.0.6](https://img.shields.io/badge/version-0.0.6-blue.svg)](./Cargo.toml)
+[![Version: 0.1.0](https://img.shields.io/badge/version-0.1.0-blue.svg)](./Cargo.toml)
 
-`codex-threads` 是一个轻量 Rust CLI，用来把 `~/.codex/sessions` 下的历史 Codex 会话整理成可搜索、可读取的本地索引。
+`codex-threads` 是 Codex 原生线程能力的本地历史检索补充层。它把 `~/.codex/sessions` 下的会话整理成可搜索、可读取、可供脚本消费的本地索引。
 
-当前版本：`0.0.6`
+当前版本：`0.1.0`，详见 [ROADMAP.md](./ROADMAP.md)。
+
+> [!IMPORTANT]
+> Codex 原生能力负责创建、列举、读取、续聊、fork、handoff、置顶和归档线程。`codex-threads` 不再扩展线程生命周期管理，只保留原生能力尚未覆盖的跨历史全文检索、事件证据、离线读取和结构化交接。
 
 它面向两类使用方式：
 
-- 人类日常检索旧线程
-- Agent 用 `--json` 做结构化回溯
+- 人类跨全部本地历史检索消息和执行证据
+- Agent 用 `--json` 找到候选 `session_id`，再交给 Codex 原生线程能力继续处理
 
 ## Project Background
 
-- 本项目聚焦一个简单问题：把本地 Codex 历史线程变成真正可复用的知识索引。
+- 本项目聚焦一个简单问题：在不复制 Codex 原生线程管理的前提下，把本地历史变成可复用的检索数据层。
 - CLI 设计参考 OpenAI Codex 官方用例文档 [Create a CLI Codex can use](https://developers.openai.com/codex/use-cases/agent-friendly-clis)，重点放在稳定命令面、清晰帮助输出和结构化 JSON。
 - 也感谢 [Wangnov/cli-design-framework](https://github.com/Wangnov/cli-design-framework) 提供的 skill 指导与命令行设计思路参考。
 - 工具默认读取 `~/.codex/sessions`，把线程、消息和事件增量索引到本地 SQLite，适合脚本和 agent 二次消费。
@@ -24,11 +27,26 @@
 - 增量扫描 `~/.codex/sessions`
 - 索引健康检查与安全修复入口
 - 线程、消息、事件三类搜索与读取接口
-- 支持跟随正式版本一起发布、但默认关闭的实验能力
+- 提供稳定的 `session_id` 和 `--json` 输出，用于与 Codex 原生线程能力交接
 - 默认提供便于直接阅读的命令行输出，以及 `--json` 结构化输出
 - 除 `status` / `help` / `--version` 外，命令会附带耗时统计
 - SQLite 全文索引优先，必要时回退到普通搜索
 - 适合被其他 Codex 线程直接调用
+
+## 从旧版本升级到 0.1.0
+
+`0.1.0` 会把旧索引迁移到更紧凑的 v2 格式。索引只是可重建的派生数据：首次打开旧索引时，CLI 会清空旧格式内容并标记需要重建，不会修改 `~/.codex/sessions` 原始会话。升级后运行一次完整同步：
+
+```bash
+codex-threads --json sync --force
+```
+
+可以用 `codex-threads --json status` 或 `codex-threads --json doctor` 检查 `index_format_version` 和 `rebuild_required`。完整同步成功后，`rebuild_required` 会恢复为 `false`。
+
+此版本还包含两项有意的不兼容变化：
+
+- 删除 `--enable-experimentals` 和 `experimental restore-app-thread`，不再写 Codex App 私有状态；线程创建、续聊、fork、置顶和归档统一交给 Codex 原生能力。
+- 搜索与上下文 JSON 新增 `source` 和 `handoff`，其中的 `candidate_thread_id` 必须先由 Codex 原生线程能力确认；原生能力不可用时再执行 `local_fallback`。
 
 ## 安装
 
@@ -67,6 +85,12 @@ brew upgrade codex-threads
 - Windows x64
 
 支持平台直接安装预编译二进制，否则回退源码构建；如果当前平台暂时没有对应的预编译包，则需要本地可用的 Rust 工具链。
+
+### 版本规则
+
+- 项目在 `1.0.0` 之前使用 `0.y.z`：`y` 表示产品边界或不兼容契约的变化，`z` 表示兼容修复。
+- `0.1.0` 是“本地历史检索补充层”的首个定位版本。
+- 日期和 Codex 兼容快照放在 release notes 与兼容性记录中，不进入版本号。
 
 ## 各平台使用说明
 
@@ -251,58 +275,6 @@ codex-threads --json events search "agent" --event-type agent_reasoning --until 
 - 默认会优先保留 `function_call` / `function_call_output` 等执行证据，再补充最近事件
 - 这是确定性抽取，不调用 LLM；如果需要完整原文，继续使用 `threads read`、`messages read` 或 `events read`
 
-## 实验能力
-
-实验能力会跟随正式版本一起发布，但默认关闭，需要在当前命令里显式开启。
-
-开启规则：
-
-- 统一使用 `--enable-experimentals <feature1>,<feature2>`
-- 这类开关只对当前命令生效，不会写入长期状态
-- 当前只接受白名单 feature 名，不支持未知值、空项或隐式放行
-
-风险分级参考：
-
-- `低`：只读、只解释、或纯 `--dry-run` 的实验能力
-- `中`：只修改 `codex-threads` 自己维护的本地状态
-- `高`：会改写其他工具或应用的私有本地状态
-
-评估要求：
-
-- 每新增一个实验能力，都需要单独评估风险级别
-- 风险提示写在对应能力区块，不使用一段全局结论覆盖所有实验能力
-
-当前实验能力：
-
-### `restore-app-thread`
-
-![跟随版本 0.0.6](https://img.shields.io/badge/%E8%B7%9F%E9%9A%8F%E7%89%88%E6%9C%AC-0.0.6-0A7F5A)
-
-风险级别：`高`
-
-> [!WARNING]
-> `restore-app-thread` 会直接修改 Codex App 私有本地状态，例如 `state_5.sqlite`，以及在启用 `--pin` 时修改 `.codex-global-state.json`。
-> 这类状态没有稳定公开接口，可能受应用版本、schema 变化和运行中写回影响。建议只在 Codex App 已退出、已完成备份、明确知道恢复目标时使用。
-
-- 读取本地原始 session，并尝试把指定线程恢复到 Codex App 本地线程视图
-- 支持 `--dry-run` 先看恢复计划
-- 支持 `--pin` 同步把线程加入 `pinned-thread-ids`
-- 默认假设 Codex App 已退出，并会在写入前自动创建备份目录
-
-示例：
-
-```bash
-codex-threads \
-  --enable-experimentals restore-app-thread \
-  experimental restore-app-thread <thread-id> \
-  --dry-run
-
-codex-threads \
-  --enable-experimentals restore-app-thread \
-  experimental restore-app-thread <thread-id> \
-  --pin
-```
-
 输出约定：
 
 - 默认命令行输出会在 `sync`、`search`、`read` 等操作末尾追加 `耗时: ...`
@@ -331,7 +303,8 @@ codex-threads \
 - 大 session 优化：对持续追加的会话优先走 append-tail 增量刷新，遇到截断或改写时再回退整条重建
 - SQLite 索引：线程、消息、事件分表存储
 - FTS 优先：若 SQLite 支持 FTS5 则用全文检索，否则自动回退到 `LIKE`
-- 线程聚合搜索：按标题、路径、消息内容和事件摘要搜索整条线程
+- 线程聚合搜索：按标题、路径和代表性消息内容搜索整条线程，聚合文本设有上限
+- 事件索引默认保留工具调用、工具结果和推理等执行证据，排除重复消息与低信号生命周期事件
 
 ## 代码结构
 
@@ -352,7 +325,8 @@ codex-threads \
 
 1. 先运行 `codex-threads --json sync`
 2. 用 `messages search`、`threads search` 或 `events search` 找线索
-3. 再用 `threads read`、`messages read` 或 `events read` 深入读取
+3. 将命中的 `session_id` 交给 Codex 原生线程能力确认、读取或续聊
+4. 原生线程不可用或需要确定性上下文时，再回退到 `threads read`、`messages read`、`events read` 或 `threads context`
 
 ## Contributing
 

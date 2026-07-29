@@ -7,6 +7,10 @@ use std::{
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
+const MAX_AGGREGATE_CHARS: usize = 32_000;
+const MAX_AGGREGATE_MESSAGE_CHARS: usize = 600;
+const MAX_TAIL_AGGREGATE_CHARS: usize = 8_000;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedSession {
     pub session_id: String,
@@ -98,7 +102,7 @@ impl SessionAccumulator {
 
         self.tail_record = Some(line.to_string());
 
-        let value: Value = serde_json::from_str(&line)
+        let value: Value = serde_json::from_str(line)
             .with_context(|| format!("invalid JSON in {}", path.display()))?;
         let timestamp = value
             .get("timestamp")
@@ -139,7 +143,7 @@ impl SessionAccumulator {
                         .and_then(Value::as_str)
                         .unwrap_or("unknown")
                         .to_string();
-                    let text = extract_message_text(&payload);
+                    let text = sanitize_message_text(&role, extract_message_text(&payload));
                     if !text.is_empty() && !should_skip_default_message(&role, &text) {
                         if role == "user" && self.first_user_message.is_none() {
                             self.first_user_message = Some(text.clone());
@@ -158,12 +162,7 @@ impl SessionAccumulator {
                         payload_type.to_string()
                     };
                     let summary = summarize_response_item(&payload);
-                    self.events.push(ParsedEvent {
-                        timestamp,
-                        event_type,
-                        summary: trim_for_storage(&summary, 1000),
-                        raw_json: String::new(),
-                    });
+                    push_event(&mut self.events, timestamp, event_type, summary);
                 }
             }
             "event_msg" => {
@@ -173,29 +172,24 @@ impl SessionAccumulator {
                     .unwrap_or("event_msg")
                     .to_string();
                 let summary = summarize_event_payload(&payload);
-                self.events.push(ParsedEvent {
-                    timestamp,
-                    event_type,
-                    summary: trim_for_storage(&summary, 1000),
-                    raw_json: String::new(),
-                });
+                push_event(&mut self.events, timestamp, event_type, summary);
             }
             "turn_context" => {
                 let summary = summarize_turn_context(&payload);
-                self.events.push(ParsedEvent {
+                push_event(
+                    &mut self.events,
                     timestamp,
-                    event_type: "turn_context".to_string(),
-                    summary: trim_for_storage(&summary, 1000),
-                    raw_json: String::new(),
-                });
+                    "turn_context".to_string(),
+                    summary,
+                );
             }
             other => {
-                self.events.push(ParsedEvent {
+                push_event(
+                    &mut self.events,
                     timestamp,
-                    event_type: other.to_string(),
-                    summary: trim_for_storage(&compact_json(&payload), 1000),
-                    raw_json: String::new(),
-                });
+                    other.to_string(),
+                    compact_json(&payload),
+                );
             }
         }
 
@@ -251,6 +245,88 @@ fn extract_message_text(payload: &Value) -> String {
     }
 
     normalize_text(parts.join("\n"))
+}
+
+fn sanitize_message_text(role: &str, text: String) -> String {
+    if role != "user" {
+        return text;
+    }
+
+    let mut cleaned = text.trim().to_string();
+    loop {
+        let previous = cleaned.clone();
+        cleaned = strip_leading_tagged_block(&cleaned, "recommended_plugins");
+        cleaned = strip_leading_agents_instructions(&cleaned);
+        cleaned = strip_leading_tagged_block(&cleaned, "environment_context");
+        cleaned = strip_leading_tagged_block(&cleaned, "permissions instructions");
+        cleaned = strip_leading_tagged_block(&cleaned, "collaboration_mode");
+        if cleaned == previous {
+            break;
+        }
+    }
+
+    normalize_text(cleaned)
+}
+
+fn strip_leading_tagged_block(text: &str, tag: &str) -> String {
+    let trimmed = text.trim_start();
+    let open = format!("<{tag}>");
+    if !trimmed.starts_with(&open) {
+        return trimmed.to_string();
+    }
+    let close = format!("</{tag}>");
+    let Some(end) = trimmed.find(&close) else {
+        return trimmed.to_string();
+    };
+    trimmed[end + close.len()..].trim_start().to_string()
+}
+
+fn strip_leading_agents_instructions(text: &str) -> String {
+    let trimmed = text.trim_start();
+    if !trimmed.starts_with("# AGENTS.md instructions") {
+        return trimmed.to_string();
+    }
+    let close = "</INSTRUCTIONS>";
+    let Some(end) = trimmed.find(close) else {
+        return trimmed.to_string();
+    };
+    trimmed[end + close.len()..].trim_start().to_string()
+}
+
+fn push_event(
+    events: &mut Vec<ParsedEvent>,
+    timestamp: String,
+    event_type: String,
+    summary: String,
+) {
+    if is_low_signal_event(&event_type) {
+        return;
+    }
+    let summary = trim_for_storage(&summary, 1000);
+    if summary.is_empty() && event_type.is_empty() {
+        return;
+    }
+    events.push(ParsedEvent {
+        timestamp,
+        event_type,
+        summary,
+        raw_json: String::new(),
+    });
+}
+
+fn is_low_signal_event(event_type: &str) -> bool {
+    matches!(
+        event_type,
+        "token_count"
+            | "task_started"
+            | "task_complete"
+            | "user_message"
+            | "agent_message"
+            | "turn_context"
+            | "thread_settings_applied"
+            | "context_compacted"
+            | "compacted"
+    )
 }
 
 fn collect_text_fragments(value: &Value, out: &mut Vec<String>) {
@@ -380,34 +456,49 @@ fn build_aggregate_text(
     title: &str,
     cwd: Option<&str>,
     messages: &[ParsedMessage],
-    events: &[ParsedEvent],
+    _events: &[ParsedEvent],
 ) -> String {
     let mut parts = vec![title.to_string()];
     if let Some(cwd) = cwd {
         parts.push(cwd.to_string());
     }
-    for message in messages {
-        parts.push(trim_for_storage(&message.text, 1200));
-    }
-    for event in events {
-        if !event.summary.is_empty() {
-            parts.push(trim_for_storage(&event.summary, 600));
-        }
-    }
-    normalize_text(parts.join("\n"))
+    let mut recent_messages = messages
+        .iter()
+        .rev()
+        .map(|message| trim_for_storage(&message.text, MAX_AGGREGATE_MESSAGE_CHARS))
+        .filter(|message| !message.is_empty())
+        .collect::<Vec<_>>();
+    recent_messages.reverse();
+    parts.extend(recent_messages);
+    take_last_chars_with_prefix(&normalize_text(parts.join("\n")), MAX_AGGREGATE_CHARS)
 }
 
-fn build_tail_aggregate_text(messages: &[ParsedMessage], events: &[ParsedEvent]) -> String {
-    let mut parts = Vec::new();
-    for message in messages {
-        parts.push(trim_for_storage(&message.text, 1200));
+fn build_tail_aggregate_text(messages: &[ParsedMessage], _events: &[ParsedEvent]) -> String {
+    let parts = messages
+        .iter()
+        .map(|message| trim_for_storage(&message.text, MAX_AGGREGATE_MESSAGE_CHARS))
+        .filter(|message| !message.is_empty())
+        .collect::<Vec<_>>();
+    take_last_chars(&normalize_text(parts.join("\n")), MAX_TAIL_AGGREGATE_CHARS)
+}
+
+fn take_last_chars_with_prefix(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
     }
-    for event in events {
-        if !event.summary.is_empty() {
-            parts.push(trim_for_storage(&event.summary, 600));
-        }
+
+    let prefix = text.lines().take(2).collect::<Vec<_>>().join(" ");
+    let prefix = trim_for_storage(&prefix, 1000);
+    let remaining = max_chars.saturating_sub(prefix.chars().count() + 1);
+    format!("{} {}", prefix, take_last_chars(text, remaining))
+}
+
+fn take_last_chars(text: &str, max_chars: usize) -> String {
+    let count = text.chars().count();
+    if count <= max_chars {
+        return text.to_string();
     }
-    normalize_text(parts.join("\n"))
+    text.chars().skip(count - max_chars).collect()
 }
 
 fn fallback_session_id(path: &Path) -> String {

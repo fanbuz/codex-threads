@@ -33,6 +33,18 @@ pub fn run(store: &Store, args: &DoctorArgs) -> Result<Rendered> {
         format!("索引文件: {}", report.status_summary.index_path),
         format!("FTS5 可用: {}", report.status_summary.fts_available),
         format!(
+            "索引格式版本: {}",
+            report.status_summary.index_format_version
+        ),
+        format!(
+            "需要全量重建: {}",
+            if report.status_summary.rebuild_required {
+                "是"
+            } else {
+                "否"
+            }
+        ),
+        format!(
             "同步锁: {}",
             render_lock_state(&report.status_summary.sync_lock)
         ),
