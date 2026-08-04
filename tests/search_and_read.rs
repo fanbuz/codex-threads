@@ -43,13 +43,18 @@ fn assert_native_handoff(value: &Value, session_id: &str) {
         .contains(session_id));
 }
 
-fn insert_matching_search_rows(index_dir: &std::path::Path, count: usize) {
+fn insert_search_rows(
+    index_dir: &std::path::Path,
+    count: usize,
+    search_text: impl Fn(usize) -> String,
+) {
     let mut conn = Connection::open(index_dir.join("threads.sqlite3")).unwrap();
     let tx = conn.transaction().unwrap();
     for index in 0..count {
         let session_id = format!("bulk-session-{index:03}");
         let path = format!("/tmp/{session_id}.jsonl");
         let timestamp = format!("2026-05-01T00:{:02}:{:02}Z", index / 60, index % 60);
+        let text = search_text(index);
 
         tx.execute(
             r#"
@@ -62,9 +67,9 @@ fn insert_matching_search_rows(index_dir: &std::path::Path, count: usize) {
                 session_id,
                 path,
                 format!("{session_id}.jsonl"),
-                format!("Limit needle thread {index}"),
+                format!("Bulk search thread {index}"),
                 timestamp,
-                format!("limitneedle aggregate {index}"),
+                text,
             ],
         )
         .unwrap();
@@ -77,34 +82,34 @@ fn insert_matching_search_rows(index_dir: &std::path::Path, count: usize) {
             params![
                 thread_row_id,
                 session_id,
-                format!("Limit needle thread {index}"),
+                format!("Bulk search thread {index}"),
                 path,
-                format!("limitneedle aggregate {index}"),
+                text,
             ],
         )
         .unwrap();
 
         tx.execute(
             "INSERT INTO messages(session_id, idx, timestamp, role, text, raw_json) VALUES (?1, 0, ?2, 'assistant', ?3, '{}')",
-            params![session_id, timestamp, format!("limitneedle message {index}")],
+            params![session_id, timestamp, text],
         )
         .unwrap();
         let message_row_id = tx.last_insert_rowid();
         tx.execute(
             "INSERT INTO messages_fts(rowid, session_id, role, text) VALUES (?1, ?2, 'assistant', ?3)",
-            params![message_row_id, session_id, format!("limitneedle message {index}")],
+            params![message_row_id, session_id, text],
         )
         .unwrap();
 
         tx.execute(
             "INSERT INTO events(session_id, idx, timestamp, event_type, summary, raw_json) VALUES (?1, 0, ?2, 'agent_reasoning', ?3, '{}')",
-            params![session_id, timestamp, format!("limitneedle event {index}")],
+            params![session_id, timestamp, text],
         )
         .unwrap();
         let event_row_id = tx.last_insert_rowid();
         tx.execute(
             "INSERT INTO events_fts(rowid, session_id, event_type, summary) VALUES (?1, ?2, 'agent_reasoning', ?3)",
-            params![event_row_id, session_id, format!("limitneedle event {index}")],
+            params![event_row_id, session_id, text],
         )
         .unwrap();
     }
@@ -162,7 +167,9 @@ fn messages_search_returns_matching_snippets() {
 #[test]
 fn literal_fts_search_honors_limits_above_fallback_candidate_cap() {
     let (_tmp, sessions_dir, index_dir) = seed_index();
-    insert_matching_search_rows(&index_dir, 300);
+    insert_search_rows(&index_dir, 300, |index| {
+        format!("limitneedle result {index}")
+    });
 
     for command in ["threads", "messages", "events"] {
         let output = Command::cargo_bin("codex-threads")
@@ -189,6 +196,46 @@ fn literal_fts_search_honors_limits_above_fallback_candidate_cap() {
         assert_eq!(json["search"]["backend"], "fts", "{command}");
         assert_eq!(json["search"]["query_mode"], "literal", "{command}");
         assert_eq!(json["count"], 300, "{command}");
+    }
+}
+
+#[test]
+fn literal_search_supplements_saturated_fts_candidates_after_filtering() {
+    let (_tmp, sessions_dir, index_dir) = seed_index();
+    insert_search_rows(&index_dir, 300, |index| {
+        if index == 0 {
+            format!("target-phrase literal {index}")
+        } else if index >= 296 {
+            format!("target-phrase {} literal {index}", "padding ".repeat(100))
+        } else {
+            format!("target phrase token match {index}")
+        }
+    });
+
+    for command in ["threads", "messages", "events"] {
+        let output = Command::cargo_bin("codex-threads")
+            .unwrap()
+            .args([
+                "--json",
+                "--sessions-dir",
+                sessions_dir.to_str().unwrap(),
+                "--index-dir",
+                index_dir.to_str().unwrap(),
+                command,
+                "search",
+                "target-phrase",
+                "--limit",
+                "100",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+
+        let json: Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["search"]["query_mode"], "literal", "{command}");
+        assert_eq!(json["count"], 5, "{command}");
     }
 }
 
@@ -986,4 +1033,36 @@ fn threads_context_keeps_resume_pointers_with_tight_budget() {
     assert!(text.contains("## Resume Pointers"));
     assert!(text.contains("codex-threads threads read session-alpha --limit 20"));
     assert!(text.contains("codex-threads events read session-alpha --limit 20"));
+}
+
+#[test]
+fn threads_context_rejects_budget_smaller_than_resume_pointers() {
+    let (_tmp, sessions_dir, index_dir) = seed_index();
+
+    let output = Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "threads",
+            "context",
+            "session-alpha",
+            "--budget",
+            "200",
+        ])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+
+    let rendered = format!(
+        "{}{}",
+        String::from_utf8(output.stdout).unwrap(),
+        String::from_utf8(output.stderr).unwrap()
+    );
+    assert!(rendered.contains("--budget"));
+    assert!(rendered.contains("Resume Pointers"));
 }

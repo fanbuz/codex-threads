@@ -48,6 +48,7 @@ impl Store {
             if let Ok(mut results) =
                 self.search_threads_fts(&fts_query, literal_candidate_limit, filters)
             {
+                let candidates_saturated = results.len() >= literal_candidate_limit;
                 results.retain(|result| {
                     analyze_match(
                         original_query,
@@ -58,7 +59,7 @@ impl Store {
                     .explain
                     .literal_match
                 });
-                if !results.is_empty() {
+                if !results.is_empty() && (results.len() >= limit || !candidates_saturated) {
                     return Ok(finalize_thread_search_report(
                         results,
                         build_search_meta(
@@ -167,6 +168,7 @@ impl Store {
             if let Ok(mut results) =
                 self.search_messages_fts(&fts_query, literal_candidate_limit, filters)
             {
+                let candidates_saturated = results.len() >= literal_candidate_limit;
                 results.retain(|result| {
                     analyze_match(
                         original_query,
@@ -177,7 +179,7 @@ impl Store {
                     .explain
                     .literal_match
                 });
-                if !results.is_empty() {
+                if !results.is_empty() && (results.len() >= limit || !candidates_saturated) {
                     return Ok(finalize_message_search_report(
                         results,
                         build_search_meta(
@@ -286,6 +288,7 @@ impl Store {
             if let Ok(mut results) =
                 self.search_events_fts(&fts_query, literal_candidate_limit, filters)
             {
+                let candidates_saturated = results.len() >= literal_candidate_limit;
                 results.retain(|result| {
                     analyze_match(
                         original_query,
@@ -296,7 +299,7 @@ impl Store {
                     .explain
                     .literal_match
                 });
-                if !results.is_empty() {
+                if !results.is_empty() && (results.len() >= limit || !candidates_saturated) {
                     return Ok(finalize_event_search_report(
                         results,
                         build_search_meta(
