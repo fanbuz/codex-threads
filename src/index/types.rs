@@ -164,11 +164,11 @@ pub struct SyncRequest {
 
 impl SyncRequest {
     pub fn is_scoped(&self) -> bool {
-        self.since.is_some()
-            || self.until.is_some()
-            || self.path.is_some()
-            || self.recent.is_some()
-            || self.budget_files.is_some()
+        self.has_selection_scope() || self.budget_files.is_some()
+    }
+
+    pub fn has_selection_scope(&self) -> bool {
+        self.since.is_some() || self.until.is_some() || self.path.is_some() || self.recent.is_some()
     }
 }
 

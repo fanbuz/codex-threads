@@ -147,7 +147,9 @@ impl Store {
 
         if !report.partial {
             self.record_successful_sync(request, &mut report.cooldown)?;
-            if !request.is_scoped() {
+            // A file budget bounds one run without narrowing the session corpus. Once the
+            // final budgeted batch completes, it satisfies the full-rebuild requirement.
+            if !request.has_selection_scope() {
                 self.mark_rebuild_complete()?;
             }
         }
@@ -496,6 +498,27 @@ impl Store {
                 processed_files,
                 0,
                 Some("Saved sync state was consumed and cleared.".to_string()),
+            ));
+        }
+
+        // Rebuild-required runs deliberately rediscover the full corpus instead of trusting a
+        // checkpoint created for the previous index format. Changed-file detection still
+        // advances a budget-only rebuild across invocations, so clear its matching checkpoint
+        // after the last batch finishes.
+        if request.budget_files.is_some()
+            && self
+                .load_sync_resume_state()?
+                .is_some_and(|state| state.request == *request)
+        {
+            self.clear_sync_resume_state()?;
+            return Ok(build_sync_resume(
+                state_path,
+                "completed",
+                request.budget_files,
+                false,
+                processed_files,
+                0,
+                Some("Budgeted sync completed and saved state was cleared.".to_string()),
             ));
         }
 
