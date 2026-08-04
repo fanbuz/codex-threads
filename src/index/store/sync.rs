@@ -148,8 +148,11 @@ impl Store {
         if !report.partial {
             self.record_successful_sync(request, &mut report.cooldown)?;
             // A file budget bounds one run without narrowing the session corpus. Once the
-            // final budgeted batch completes, it satisfies the full-rebuild requirement.
+            // final budgeted batch completes, it satisfies the full-rebuild requirement. A
+            // completed full-corpus run also supersedes any checkpoint left by an older request
+            // or index format.
             if !request.has_selection_scope() {
+                self.clear_sync_resume_state()?;
                 self.mark_rebuild_complete()?;
             }
         }

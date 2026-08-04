@@ -2,7 +2,9 @@ mod common;
 
 use assert_cmd::Command;
 use rusqlite::Connection;
+use serde_json::json;
 use serde_json::Value;
+use std::fs;
 use tempfile::tempdir;
 
 fn sync_fixture(root: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
@@ -39,6 +41,25 @@ fn mark_index_as_legacy(index_dir: &std::path::Path) {
         USING fts5(session_id UNINDEXED, event_type, summary);
         UPDATE index_meta SET value = '1' WHERE key = 'format_version';
         "#,
+    )
+    .unwrap();
+}
+
+fn write_budget_resume_state(index_dir: &std::path::Path, pending_path: &std::path::Path) {
+    let state = json!({
+        "request": {
+            "since": null,
+            "until": null,
+            "path": null,
+            "recent": null,
+            "budget_files": 1
+        },
+        "pending_paths": [pending_path.to_string_lossy()],
+        "saved_at": "2026-08-04T00:00:00Z"
+    });
+    fs::write(
+        index_dir.join("sync.resume.json"),
+        serde_json::to_vec_pretty(&state).unwrap(),
     )
     .unwrap();
 }
@@ -232,4 +253,42 @@ fn scoped_budgeted_sync_does_not_clear_legacy_rebuild_marker() {
     let json: Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(json["status"]["threads"], 1);
     assert_eq!(json["status"]["rebuild_required"], true);
+}
+
+#[test]
+fn unbudgeted_legacy_rebuild_clears_preexisting_budget_checkpoint() {
+    let tmp = tempdir().unwrap();
+    let (sessions_dir, index_dir) = sync_fixture(tmp.path());
+    let pending_path = sessions_dir
+        .join("2026/04/12")
+        .join("rollout-2026-04-12T10-00-00-session-alpha.jsonl");
+    write_budget_resume_state(&index_dir, &pending_path);
+    mark_index_as_legacy(&index_dir);
+
+    Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "status",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("codex-threads")
+        .unwrap()
+        .args([
+            "--json",
+            "--sessions-dir",
+            sessions_dir.to_str().unwrap(),
+            "--index-dir",
+            index_dir.to_str().unwrap(),
+            "sync",
+            "--force",
+        ])
+        .assert()
+        .success();
+
+    assert!(!index_dir.join("sync.resume.json").exists());
 }
