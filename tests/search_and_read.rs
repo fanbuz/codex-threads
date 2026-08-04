@@ -1,6 +1,7 @@
 mod common;
 
 use assert_cmd::Command;
+use rusqlite::{params, Connection};
 use serde_json::Value;
 use tempfile::tempdir;
 
@@ -40,6 +41,74 @@ fn assert_native_handoff(value: &Value, session_id: &str) {
         .as_str()
         .unwrap()
         .contains(session_id));
+}
+
+fn insert_matching_search_rows(index_dir: &std::path::Path, count: usize) {
+    let mut conn = Connection::open(index_dir.join("threads.sqlite3")).unwrap();
+    let tx = conn.transaction().unwrap();
+    for index in 0..count {
+        let session_id = format!("bulk-session-{index:03}");
+        let path = format!("/tmp/{session_id}.jsonl");
+        let timestamp = format!("2026-05-01T00:{:02}:{:02}Z", index / 60, index % 60);
+
+        tx.execute(
+            r#"
+            INSERT INTO threads(
+                session_id, path, file_name, folder, cwd, title, started_at, ended_at,
+                message_count, event_count, aggregate_text
+            ) VALUES (?1, ?2, ?3, NULL, '/workspace/bulk', ?4, ?5, ?5, 1, 1, ?6)
+            "#,
+            params![
+                session_id,
+                path,
+                format!("{session_id}.jsonl"),
+                format!("Limit needle thread {index}"),
+                timestamp,
+                format!("limitneedle aggregate {index}"),
+            ],
+        )
+        .unwrap();
+        let thread_row_id = tx.last_insert_rowid();
+        tx.execute(
+            r#"
+            INSERT INTO threads_fts(rowid, session_id, title, cwd, path, aggregate_text)
+            VALUES (?1, ?2, ?3, '/workspace/bulk', ?4, ?5)
+            "#,
+            params![
+                thread_row_id,
+                session_id,
+                format!("Limit needle thread {index}"),
+                path,
+                format!("limitneedle aggregate {index}"),
+            ],
+        )
+        .unwrap();
+
+        tx.execute(
+            "INSERT INTO messages(session_id, idx, timestamp, role, text, raw_json) VALUES (?1, 0, ?2, 'assistant', ?3, '{}')",
+            params![session_id, timestamp, format!("limitneedle message {index}")],
+        )
+        .unwrap();
+        let message_row_id = tx.last_insert_rowid();
+        tx.execute(
+            "INSERT INTO messages_fts(rowid, session_id, role, text) VALUES (?1, ?2, 'assistant', ?3)",
+            params![message_row_id, session_id, format!("limitneedle message {index}")],
+        )
+        .unwrap();
+
+        tx.execute(
+            "INSERT INTO events(session_id, idx, timestamp, event_type, summary, raw_json) VALUES (?1, 0, ?2, 'agent_reasoning', ?3, '{}')",
+            params![session_id, timestamp, format!("limitneedle event {index}")],
+        )
+        .unwrap();
+        let event_row_id = tx.last_insert_rowid();
+        tx.execute(
+            "INSERT INTO events_fts(rowid, session_id, event_type, summary) VALUES (?1, ?2, 'agent_reasoning', ?3)",
+            params![event_row_id, session_id, format!("limitneedle event {index}")],
+        )
+        .unwrap();
+    }
+    tx.commit().unwrap();
 }
 
 #[test]
@@ -88,6 +157,39 @@ fn messages_search_returns_matching_snippets() {
     assert_eq!(json["results"][0]["explain"]["matched_terms"], 3);
     assert_eq!(json["results"][0]["explain"]["literal_match"], true);
     assert_native_handoff(&json["results"][0], "session-alpha");
+}
+
+#[test]
+fn literal_fts_search_honors_limits_above_fallback_candidate_cap() {
+    let (_tmp, sessions_dir, index_dir) = seed_index();
+    insert_matching_search_rows(&index_dir, 300);
+
+    for command in ["threads", "messages", "events"] {
+        let output = Command::cargo_bin("codex-threads")
+            .unwrap()
+            .args([
+                "--json",
+                "--sessions-dir",
+                sessions_dir.to_str().unwrap(),
+                "--index-dir",
+                index_dir.to_str().unwrap(),
+                command,
+                "search",
+                "limitneedle",
+                "--limit",
+                "300",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+
+        let json: Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["search"]["backend"], "fts", "{command}");
+        assert_eq!(json["search"]["query_mode"], "literal", "{command}");
+        assert_eq!(json["count"], 300, "{command}");
+    }
 }
 
 #[test]

@@ -41,10 +41,13 @@ impl Store {
             query_terms.join(" ")
         };
         let fallback_limit = fallback_candidate_limit(limit);
+        let literal_candidate_limit = fallback_limit.max(limit);
 
         if self.fts_available {
             let fts_query = literal_fts_query(original_query);
-            if let Ok(mut results) = self.search_threads_fts(&fts_query, fallback_limit, filters) {
+            if let Ok(mut results) =
+                self.search_threads_fts(&fts_query, literal_candidate_limit, filters)
+            {
                 results.retain(|result| {
                     analyze_match(
                         original_query,
@@ -74,7 +77,7 @@ impl Store {
         }
 
         let literal_results =
-            self.search_threads_like_literal(original_query, fallback_limit, filters)?;
+            self.search_threads_like_literal(original_query, literal_candidate_limit, filters)?;
         if !literal_results.is_empty() {
             return Ok(finalize_thread_search_report(
                 literal_results,
@@ -157,10 +160,13 @@ impl Store {
             query_terms.join(" ")
         };
         let fallback_limit = fallback_candidate_limit(limit);
+        let literal_candidate_limit = fallback_limit.max(limit);
 
         if self.fts_available {
             let fts_query = literal_fts_query(original_query);
-            if let Ok(mut results) = self.search_messages_fts(&fts_query, fallback_limit, filters) {
+            if let Ok(mut results) =
+                self.search_messages_fts(&fts_query, literal_candidate_limit, filters)
+            {
                 results.retain(|result| {
                     analyze_match(
                         original_query,
@@ -190,7 +196,7 @@ impl Store {
         }
 
         let literal_results =
-            self.search_messages_like_literal(original_query, fallback_limit, filters)?;
+            self.search_messages_like_literal(original_query, literal_candidate_limit, filters)?;
         if !literal_results.is_empty() {
             return Ok(finalize_message_search_report(
                 literal_results,
@@ -273,10 +279,13 @@ impl Store {
             query_terms.join(" ")
         };
         let fallback_limit = fallback_candidate_limit(limit);
+        let literal_candidate_limit = fallback_limit.max(limit);
 
         if self.fts_available {
             let fts_query = literal_fts_query(original_query);
-            if let Ok(mut results) = self.search_events_fts(&fts_query, fallback_limit, filters) {
+            if let Ok(mut results) =
+                self.search_events_fts(&fts_query, literal_candidate_limit, filters)
+            {
                 results.retain(|result| {
                     analyze_match(
                         original_query,
@@ -306,7 +315,7 @@ impl Store {
         }
 
         let literal_results =
-            self.search_events_like_literal(original_query, fallback_limit, filters)?;
+            self.search_events_like_literal(original_query, literal_candidate_limit, filters)?;
         if !literal_results.is_empty() {
             return Ok(finalize_event_search_report(
                 literal_results,
