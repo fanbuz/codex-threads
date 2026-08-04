@@ -9,8 +9,8 @@ use super::super::search_meta::{
     SearchReport,
 };
 use super::super::types::{
-    EventSearchFilters, EventSearchHit, MessageSearchFilters, MessageSearchHit,
-    ThreadSearchFilters, ThreadSearchHit,
+    EventSearchFilters, EventSearchHit, LocalSessionSource, MessageSearchFilters, MessageSearchHit,
+    NativeThreadHandoff, ThreadSearchFilters, ThreadSearchHit,
 };
 use super::Store;
 
@@ -41,10 +41,25 @@ impl Store {
             query_terms.join(" ")
         };
         let fallback_limit = fallback_candidate_limit(limit);
+        let literal_candidate_limit = fallback_limit.max(limit);
 
         if self.fts_available {
-            if let Ok(results) = self.search_threads_fts(original_query, limit, filters) {
-                if !results.is_empty() {
+            let fts_query = literal_fts_query(original_query);
+            if let Ok(mut results) =
+                self.search_threads_fts(&fts_query, literal_candidate_limit, filters)
+            {
+                let candidates_saturated = results.len() >= literal_candidate_limit;
+                results.retain(|result| {
+                    analyze_match(
+                        original_query,
+                        &query_terms,
+                        &thread_search_fields(result),
+                        0,
+                    )
+                    .explain
+                    .literal_match
+                });
+                if !results.is_empty() && (results.len() >= limit || !candidates_saturated) {
                     return Ok(finalize_thread_search_report(
                         results,
                         build_search_meta(
@@ -63,7 +78,7 @@ impl Store {
         }
 
         let literal_results =
-            self.search_threads_like_literal(original_query, fallback_limit, filters)?;
+            self.search_threads_like_literal(original_query, literal_candidate_limit, filters)?;
         if !literal_results.is_empty() {
             return Ok(finalize_thread_search_report(
                 literal_results,
@@ -146,10 +161,25 @@ impl Store {
             query_terms.join(" ")
         };
         let fallback_limit = fallback_candidate_limit(limit);
+        let literal_candidate_limit = fallback_limit.max(limit);
 
         if self.fts_available {
-            if let Ok(results) = self.search_messages_fts(original_query, limit, filters) {
-                if !results.is_empty() {
+            let fts_query = literal_fts_query(original_query);
+            if let Ok(mut results) =
+                self.search_messages_fts(&fts_query, literal_candidate_limit, filters)
+            {
+                let candidates_saturated = results.len() >= literal_candidate_limit;
+                results.retain(|result| {
+                    analyze_match(
+                        original_query,
+                        &query_terms,
+                        &message_search_fields(result),
+                        0,
+                    )
+                    .explain
+                    .literal_match
+                });
+                if !results.is_empty() && (results.len() >= limit || !candidates_saturated) {
                     return Ok(finalize_message_search_report(
                         results,
                         build_search_meta(
@@ -168,7 +198,7 @@ impl Store {
         }
 
         let literal_results =
-            self.search_messages_like_literal(original_query, fallback_limit, filters)?;
+            self.search_messages_like_literal(original_query, literal_candidate_limit, filters)?;
         if !literal_results.is_empty() {
             return Ok(finalize_message_search_report(
                 literal_results,
@@ -251,10 +281,25 @@ impl Store {
             query_terms.join(" ")
         };
         let fallback_limit = fallback_candidate_limit(limit);
+        let literal_candidate_limit = fallback_limit.max(limit);
 
         if self.fts_available {
-            if let Ok(results) = self.search_events_fts(original_query, limit, filters) {
-                if !results.is_empty() {
+            let fts_query = literal_fts_query(original_query);
+            if let Ok(mut results) =
+                self.search_events_fts(&fts_query, literal_candidate_limit, filters)
+            {
+                let candidates_saturated = results.len() >= literal_candidate_limit;
+                results.retain(|result| {
+                    analyze_match(
+                        original_query,
+                        &query_terms,
+                        &event_search_fields(result),
+                        0,
+                    )
+                    .explain
+                    .literal_match
+                });
+                if !results.is_empty() && (results.len() >= limit || !candidates_saturated) {
                     return Ok(finalize_event_search_report(
                         results,
                         build_search_meta(
@@ -273,7 +318,7 @@ impl Store {
         }
 
         let literal_results =
-            self.search_events_like_literal(original_query, fallback_limit, filters)?;
+            self.search_events_like_literal(original_query, literal_candidate_limit, filters)?;
         if !literal_results.is_empty() {
             return Ok(finalize_event_search_report(
                 literal_results,
@@ -351,8 +396,7 @@ impl Store {
                 t.message_count,
                 t.event_count,
                 t.aggregate_text,
-                t.started_at,
-                snippet(threads_fts, 4, '[', ']', '…', 12)
+                t.started_at
             FROM threads_fts
             JOIN threads t ON t.id = threads_fts.rowid
             WHERE {}
@@ -364,18 +408,21 @@ impl Store {
         let mut stmt = self.conn.prepare(&sql)?;
 
         let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
+            let session_id: String = row.get(0)?;
+            let path: String = row.get(3)?;
             let aggregate_text: String = row.get(6)?;
             let started_at: Option<String> = row.get(7)?;
-            let snippet: Option<String> = row.get(8)?;
             Ok(ThreadSearchHit {
-                session_id: row.get(0)?,
+                session_id: session_id.clone(),
                 title: row.get(1)?,
                 cwd: row.get(2)?,
-                path: row.get(3)?,
+                path: path.clone(),
                 message_count: row.get::<_, i64>(4)? as usize,
                 event_count: row.get::<_, i64>(5)? as usize,
-                snippet: snippet.unwrap_or_else(|| excerpt(&aggregate_text, query, 120)),
+                snippet: excerpt(&aggregate_text, query, 120),
                 explain: SearchExplain::default(),
+                source: LocalSessionSource::new(Some(path)),
+                handoff: NativeThreadHandoff::new(&session_id),
                 aggregate_text,
                 started_at,
             })
@@ -438,16 +485,20 @@ impl Store {
         let mut stmt = self.conn.prepare(&sql)?;
 
         let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
+            let session_id: String = row.get(0)?;
+            let path: String = row.get(3)?;
             let aggregate_text: String = row.get(6)?;
             Ok(ThreadSearchHit {
-                session_id: row.get(0)?,
+                session_id: session_id.clone(),
                 title: row.get(1)?,
                 cwd: row.get(2)?,
-                path: row.get(3)?,
+                path: path.clone(),
                 message_count: row.get::<_, i64>(4)? as usize,
                 event_count: row.get::<_, i64>(5)? as usize,
                 snippet: excerpt(&aggregate_text, original_query, 120),
                 explain: SearchExplain::default(),
+                source: LocalSessionSource::new(Some(path)),
+                handoff: NativeThreadHandoff::new(&session_id),
                 aggregate_text,
                 started_at: row.get(7)?,
             })
@@ -501,16 +552,20 @@ impl Store {
         let mut stmt = self.conn.prepare(&sql)?;
 
         let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
+            let session_id: String = row.get(0)?;
+            let path: String = row.get(3)?;
             let aggregate_text: String = row.get(6)?;
             Ok(ThreadSearchHit {
-                session_id: row.get(0)?,
+                session_id: session_id.clone(),
                 title: row.get(1)?,
                 cwd: row.get(2)?,
-                path: row.get(3)?,
+                path: path.clone(),
                 message_count: row.get::<_, i64>(4)? as usize,
                 event_count: row.get::<_, i64>(5)? as usize,
                 snippet: excerpt(&aggregate_text, normalized_query, 120),
                 explain: SearchExplain::default(),
+                source: LocalSessionSource::new(Some(path)),
+                handoff: NativeThreadHandoff::new(&session_id),
                 aggregate_text,
                 started_at: row.get(7)?,
             })
@@ -539,7 +594,7 @@ impl Store {
                 m.timestamp,
                 m.role,
                 m.text,
-                snippet(messages_fts, 2, '[', ']', '…', 12)
+                t.path
             FROM messages_fts
             JOIN messages m ON m.id = messages_fts.rowid
             LEFT JOIN threads t ON t.session_id = m.session_id
@@ -552,16 +607,19 @@ impl Store {
         let mut stmt = self.conn.prepare(&sql)?;
 
         let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
+            let session_id: String = row.get(0)?;
             let text: String = row.get(4)?;
-            let snippet: Option<String> = row.get(5)?;
+            let path: Option<String> = row.get(5)?;
             Ok(MessageSearchHit {
-                session_id: row.get(0)?,
+                session_id: session_id.clone(),
                 title: row.get(1)?,
                 timestamp: row.get(2)?,
                 role: row.get(3)?,
                 text: text.clone(),
-                snippet: snippet.unwrap_or_else(|| excerpt(&text, query, 120)),
+                snippet: excerpt(&text, query, 120),
                 explain: SearchExplain::default(),
+                source: LocalSessionSource::new(path),
+                handoff: NativeThreadHandoff::new(&session_id),
             })
         })?;
 
@@ -588,7 +646,7 @@ impl Store {
                 e.timestamp,
                 e.event_type,
                 e.summary,
-                snippet(events_fts, 2, '[', ']', '…', 12)
+                t.path
             FROM events_fts
             JOIN events e ON e.id = events_fts.rowid
             LEFT JOIN threads t ON t.session_id = e.session_id
@@ -601,18 +659,21 @@ impl Store {
         let mut stmt = self.conn.prepare(&sql)?;
 
         let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
+            let session_id: String = row.get(0)?;
             let event_type: String = row.get(3)?;
             let summary: String = row.get(4)?;
-            let snippet: Option<String> = row.get(5)?;
+            let path: Option<String> = row.get(5)?;
             let snippet_source = format!("{} {}", event_type, summary);
             Ok(EventSearchHit {
-                session_id: row.get(0)?,
+                session_id: session_id.clone(),
                 title: row.get(1)?,
                 timestamp: row.get(2)?,
                 event_type,
                 summary: summary.clone(),
-                snippet: snippet.unwrap_or_else(|| excerpt(&snippet_source, query, 120)),
+                snippet: excerpt(&snippet_source, query, 120),
                 explain: SearchExplain::default(),
+                source: LocalSessionSource::new(path),
+                handoff: NativeThreadHandoff::new(&session_id),
             })
         })?;
 
@@ -661,7 +722,7 @@ impl Store {
 
         let sql = format!(
             r#"
-            SELECT m.session_id, t.title, m.timestamp, m.role, m.text
+            SELECT m.session_id, t.title, m.timestamp, m.role, m.text, t.path
             FROM messages m
             LEFT JOIN threads t ON t.session_id = m.session_id
             WHERE {}
@@ -673,15 +734,19 @@ impl Store {
         let mut stmt = self.conn.prepare(&sql)?;
 
         let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
+            let session_id: String = row.get(0)?;
             let text: String = row.get(4)?;
+            let path: Option<String> = row.get(5)?;
             Ok(MessageSearchHit {
-                session_id: row.get(0)?,
+                session_id: session_id.clone(),
                 title: row.get(1)?,
                 timestamp: row.get(2)?,
                 role: row.get(3)?,
                 text: text.clone(),
                 snippet: excerpt(&text, original_query, 120),
                 explain: SearchExplain::default(),
+                source: LocalSessionSource::new(path),
+                handoff: NativeThreadHandoff::new(&session_id),
             })
         })?;
 
@@ -707,7 +772,7 @@ impl Store {
 
         let sql = format!(
             r#"
-            SELECT m.session_id, t.title, m.timestamp, m.role, m.text
+            SELECT m.session_id, t.title, m.timestamp, m.role, m.text, t.path
             FROM messages m
             LEFT JOIN threads t ON t.session_id = m.session_id
             WHERE {}
@@ -719,15 +784,19 @@ impl Store {
         let mut stmt = self.conn.prepare(&sql)?;
 
         let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
+            let session_id: String = row.get(0)?;
             let text: String = row.get(4)?;
+            let path: Option<String> = row.get(5)?;
             Ok(MessageSearchHit {
-                session_id: row.get(0)?,
+                session_id: session_id.clone(),
                 title: row.get(1)?,
                 timestamp: row.get(2)?,
                 role: row.get(3)?,
                 text: text.clone(),
                 snippet: excerpt(&text, normalized_query, 120),
                 explain: SearchExplain::default(),
+                source: LocalSessionSource::new(path),
+                handoff: NativeThreadHandoff::new(&session_id),
             })
         })?;
 
@@ -752,7 +821,7 @@ impl Store {
 
         let sql = format!(
             r#"
-            SELECT e.session_id, t.title, e.timestamp, e.event_type, e.summary
+            SELECT e.session_id, t.title, e.timestamp, e.event_type, e.summary, t.path
             FROM events e
             LEFT JOIN threads t ON t.session_id = e.session_id
             WHERE {}
@@ -764,17 +833,21 @@ impl Store {
         let mut stmt = self.conn.prepare(&sql)?;
 
         let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
+            let session_id: String = row.get(0)?;
             let event_type: String = row.get(3)?;
             let summary: String = row.get(4)?;
+            let path: Option<String> = row.get(5)?;
             let snippet_source = format!("{} {}", event_type, summary);
             Ok(EventSearchHit {
-                session_id: row.get(0)?,
+                session_id: session_id.clone(),
                 title: row.get(1)?,
                 timestamp: row.get(2)?,
                 event_type,
                 summary: summary.clone(),
                 snippet: excerpt(&snippet_source, original_query, 120),
                 explain: SearchExplain::default(),
+                source: LocalSessionSource::new(path),
+                handoff: NativeThreadHandoff::new(&session_id),
             })
         })?;
 
@@ -805,7 +878,7 @@ impl Store {
 
         let sql = format!(
             r#"
-            SELECT e.session_id, t.title, e.timestamp, e.event_type, e.summary
+            SELECT e.session_id, t.title, e.timestamp, e.event_type, e.summary, t.path
             FROM events e
             LEFT JOIN threads t ON t.session_id = e.session_id
             WHERE {}
@@ -817,17 +890,21 @@ impl Store {
         let mut stmt = self.conn.prepare(&sql)?;
 
         let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
+            let session_id: String = row.get(0)?;
             let event_type: String = row.get(3)?;
             let summary: String = row.get(4)?;
+            let path: Option<String> = row.get(5)?;
             let snippet_source = format!("{} {}", event_type, summary);
             Ok(EventSearchHit {
-                session_id: row.get(0)?,
+                session_id: session_id.clone(),
                 title: row.get(1)?,
                 timestamp: row.get(2)?,
                 event_type,
                 summary: summary.clone(),
                 snippet: excerpt(&snippet_source, normalized_query, 120),
                 explain: SearchExplain::default(),
+                source: LocalSessionSource::new(path),
+                handoff: NativeThreadHandoff::new(&session_id),
             })
         })?;
 
@@ -842,6 +919,10 @@ fn expanded_fts_query(original_query: &str, normalized_query: &str) -> Option<St
     } else {
         None
     }
+}
+
+fn literal_fts_query(query: &str) -> String {
+    format!("\"{}\"", query.replace('"', "\"\""))
 }
 
 fn should_expand_query_terms(normalized_query: &str, query_terms: &[String]) -> bool {
@@ -1129,5 +1210,5 @@ fn qualified_column(alias: &str, column: &str) -> String {
 }
 
 fn fallback_candidate_limit(limit: usize) -> usize {
-    limit.saturating_mul(5).max(50).min(250)
+    limit.saturating_mul(5).clamp(50, 250)
 }

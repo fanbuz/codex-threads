@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 
-use super::schema::init_schema;
+use super::schema::{init_schema, read_rebuild_required, write_rebuild_required};
 use super::types::StatusSummary;
 
 #[derive(Debug)]
@@ -20,6 +20,7 @@ pub struct Store {
     conn: Connection,
     index_path: PathBuf,
     fts_available: bool,
+    index_format_version: i64,
 }
 
 impl Store {
@@ -29,11 +30,12 @@ impl Store {
         let index_path = index_dir.join("threads.sqlite3");
         let conn = Connection::open(&index_path)
             .with_context(|| format!("failed to open {}", index_path.display()))?;
-        let fts_available = init_schema(&conn)?;
+        let schema = init_schema(&conn)?;
         Ok(Self {
             conn,
             index_path,
-            fts_available,
+            fts_available: schema.fts_available,
+            index_format_version: schema.format_version,
         })
     }
 
@@ -43,12 +45,22 @@ impl Store {
         Ok(StatusSummary {
             index_path: self.index_path.to_string_lossy().into_owned(),
             fts_available: self.fts_available,
+            index_format_version: self.index_format_version,
+            rebuild_required: self.rebuild_required()?,
             sync_lock: self.sync_lock_status()?,
             files,
             threads: counts.0,
             messages: counts.1,
             events: counts.2,
         })
+    }
+
+    pub(crate) fn rebuild_required(&self) -> Result<bool> {
+        read_rebuild_required(&self.conn).map_err(Into::into)
+    }
+
+    pub(crate) fn mark_rebuild_complete(&self) -> Result<()> {
+        write_rebuild_required(&self.conn, false).map_err(Into::into)
     }
 
     fn count_totals(&self) -> Result<(usize, usize, usize)> {

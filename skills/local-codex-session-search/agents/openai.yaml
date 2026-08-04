@@ -1,0 +1,4 @@
+interface:
+  display_name: "Local Codex Session Search"
+  short_description: "Search local Codex session history without managing threads"
+  default_prompt: "Use $local-codex-session-search to find relevant local Codex session history and hand candidates back to native threads."

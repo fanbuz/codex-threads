@@ -1,6 +1,5 @@
 mod context;
 mod doctor;
-mod experimental;
 mod read;
 mod search;
 mod sync;
@@ -11,12 +10,10 @@ use std::time::Instant;
 use anyhow::{bail, Result};
 
 use crate::cli::{Cli, Command, EventsCommand, MessagesCommand, ThreadsCommand};
-use crate::experimental::ExperimentalFeatures;
 use crate::index::Store;
 use crate::output::Rendered;
 
 pub fn run(cli: Cli) -> Result<Rendered> {
-    let experimentals = ExperimentalFeatures::parse_csv(cli.enable_experimentals.as_deref())?;
     let sessions_dir = resolve_sessions_dir(cli.sessions_dir.as_deref())?;
     let index_dir = resolve_index_dir(cli.index_dir.as_deref())?;
 
@@ -33,9 +30,6 @@ pub fn run(cli: Cli) -> Result<Rendered> {
             let store = Store::open(&index_dir)?;
             doctor::run(&store, &args)
         }),
-        Command::Experimental { command } => {
-            run_with_timing(|| experimental::run(command, &experimentals, &sessions_dir))
-        }
         Command::Threads { command } => match command {
             ThreadsCommand::Search(args) => run_with_timing(|| {
                 let store = Store::open(&index_dir)?;

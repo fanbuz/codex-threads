@@ -16,6 +16,10 @@ fn repository_includes_open_source_project_scaffolding() {
         "LICENSE",
         "Makefile",
         "scripts/release_notes.py",
+        "scripts/benchmark_index.py",
+        "docs/benchmarks/0.1.0.md",
+        "skills/local-codex-session-search/SKILL.md",
+        "skills/local-codex-session-search/agents/openai.yaml",
     ] {
         assert!(
             Path::new(relative_path).exists(),

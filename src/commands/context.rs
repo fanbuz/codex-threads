@@ -1,8 +1,11 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use serde::Serialize;
 
 use crate::cli::ContextArgs;
-use crate::index::{EventRecord, MessageRecord, Store, ThreadContextRead, ThreadRecord};
+use crate::index::{
+    EventRecord, LocalSessionSource, MessageRecord, NativeThreadHandoff, Store, ThreadContextRead,
+    ThreadRecord,
+};
 use crate::output::Rendered;
 
 #[derive(Debug, Serialize)]
@@ -10,6 +13,8 @@ struct ThreadContextResponse {
     command: &'static str,
     ok: bool,
     thread: ThreadRecord,
+    source: LocalSessionSource,
+    handoff: NativeThreadHandoff,
     budget: ContextBudget,
     messages: Vec<MessageRecord>,
     events: Vec<EventRecord>,
@@ -33,11 +38,15 @@ pub fn thread(store: &Store, args: &ContextArgs) -> Result<Rendered> {
             Some(0)
         },
     )?;
-    let text = render_context(&context, args.budget, include_events);
+    let text = render_context(&context, args.budget, include_events)?;
+    let source = LocalSessionSource::new(Some(context.thread.path.clone()));
+    let handoff = NativeThreadHandoff::new(&context.thread.session_id);
     let response = ThreadContextResponse {
         command: "threads.context",
         ok: true,
         thread: context.thread,
+        source,
+        handoff,
         budget: ContextBudget {
             limit: args.budget,
             used: text.len(),
@@ -54,9 +63,19 @@ pub fn thread(store: &Store, args: &ContextArgs) -> Result<Rendered> {
     Rendered::new(text, &response)
 }
 
-fn render_context(context: &ThreadContextRead, budget: usize, include_events: bool) -> String {
+fn render_context(
+    context: &ThreadContextRead,
+    budget: usize,
+    include_events: bool,
+) -> Result<String> {
     let resume_pointers = render_resume_pointers(&context.thread.session_id);
-    let content_budget = budget.saturating_sub(resume_pointers.len()).max(1);
+    if resume_pointers.len() > budget {
+        bail!(
+            "--budget 至少需要 {} 字节以容纳 Resume Pointers",
+            resume_pointers.len()
+        );
+    }
+    let content_budget = budget - resume_pointers.len();
     let mut builder = BudgetedText::new(content_budget);
     builder.push("# Codex Thread Context\n");
     builder.push(&format!(
@@ -94,16 +113,17 @@ fn render_context(context: &ThreadContextRead, budget: usize, include_events: bo
     }
 
     let mut text = builder.finish();
-    if !text.ends_with('\n') {
+    if !text.ends_with('\n') && text.len() < content_budget {
         text.push('\n');
     }
     text.push_str(&resume_pointers);
-    text
+    Ok(text)
 }
 
 fn render_resume_pointers(session_id: &str) -> String {
     format!(
-        "\n## Resume Pointers\n- Read full thread: codex-threads threads read {} --limit 20\n- Read event trail: codex-threads events read {} --limit 20\n",
+        "\n## Resume Pointers\n- Confirm candidate thread ID with Codex native threads: {}\n- Local fallback: codex-threads threads read {} --limit 20\n- Read event trail: codex-threads events read {} --limit 20\n",
+        session_id,
         session_id, session_id
     )
 }
@@ -116,7 +136,7 @@ struct BudgetedText {
 impl BudgetedText {
     fn new(limit: usize) -> Self {
         Self {
-            limit: limit.max(1),
+            limit,
             text: String::new(),
         }
     }

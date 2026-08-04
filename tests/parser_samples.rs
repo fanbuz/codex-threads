@@ -12,10 +12,56 @@ fn parser_extracts_thread_messages_and_events() {
     assert_eq!(parsed.session_id, "session-alpha");
     assert_eq!(parsed.cwd.as_deref(), Some("/workspace/alpha-repo"));
     assert_eq!(parsed.messages.len(), 3);
-    assert_eq!(parsed.events.len(), 4);
+    assert_eq!(parsed.events.len(), 2);
     assert!(parsed.title.contains("alpha-repo"));
     assert!(parsed.aggregate_text.contains("Rust and SQLite"));
     assert!(parsed.aggregate_text.contains("C++"));
+}
+
+#[test]
+fn parser_strips_known_user_preamble_and_drops_low_signal_events() {
+    let tmp = tempdir().unwrap();
+    let session_path = tmp.path().join("wrapped-user-session.jsonl");
+    std::fs::write(
+        &session_path,
+        [
+            r#"{"timestamp":"2026-07-29T01:00:00Z","type":"session_meta","payload":{"id":"session-wrapped","cwd":"/workspace/code-threads"}}"#.to_string(),
+            r##"{"timestamp":"2026-07-29T01:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<recommended_plugins>plugin catalog</recommended_plugins>\n# AGENTS.md instructions\n<INSTRUCTIONS>repo policy</INSTRUCTIONS>\n<environment_context>local context</environment_context>\n请修复真实问题"}]}}"##.to_string(),
+            r#"{"timestamp":"2026-07-29T01:00:02Z","type":"event_msg","payload":{"type":"token_count","message":"large noisy payload"}}"#.to_string(),
+            r#"{"timestamp":"2026-07-29T01:00:03Z","type":"event_msg","payload":{"type":"task_started","message":"started"}}"#.to_string(),
+            r#"{"timestamp":"2026-07-29T01:00:04Z","type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"cargo test"}}"#.to_string(),
+        ]
+        .join("\n"),
+    )
+    .unwrap();
+
+    let parsed = codex_threads::parser::parse_session_file(&session_path).unwrap();
+
+    assert_eq!(parsed.messages.len(), 1);
+    assert_eq!(parsed.messages[0].text, "请修复真实问题");
+    assert_eq!(parsed.events.len(), 1);
+    assert_eq!(parsed.events[0].event_type, "function_call");
+    assert!(!parsed.aggregate_text.contains("recommended_plugins"));
+    assert!(!parsed.aggregate_text.contains("token_count"));
+}
+
+#[test]
+fn parser_caps_thread_aggregate_text() {
+    let tmp = tempdir().unwrap();
+    let session_path = tmp.path().join("large-session.jsonl");
+    let large = "searchable ".repeat(20_000);
+    let records = [
+        r#"{"timestamp":"2026-07-29T01:00:00Z","type":"session_meta","payload":{"id":"session-large","cwd":"/workspace/large"}}"#.to_string(),
+        format!(
+            r#"{{"timestamp":"2026-07-29T01:00:01Z","type":"response_item","payload":{{"type":"message","role":"user","content":[{{"type":"input_text","text":{}}}]}}}}"#,
+            serde_json::to_string(&large).unwrap()
+        ),
+    ];
+    std::fs::write(&session_path, records.join("\n")).unwrap();
+
+    let parsed = codex_threads::parser::parse_session_file(&session_path).unwrap();
+
+    assert!(parsed.aggregate_text.chars().count() <= 32_000);
 }
 
 #[test]

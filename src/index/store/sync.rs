@@ -147,6 +147,14 @@ impl Store {
 
         if !report.partial {
             self.record_successful_sync(request, &mut report.cooldown)?;
+            // A file budget bounds one run without narrowing the session corpus. Once the
+            // final budgeted batch completes, it satisfies the full-rebuild requirement. A
+            // completed full-corpus run also supersedes any checkpoint left by an older request
+            // or index format.
+            if !request.has_selection_scope() {
+                self.clear_sync_resume_state()?;
+                self.mark_rebuild_complete()?;
+            }
         }
 
         Ok((plan, report))
@@ -207,6 +215,9 @@ impl Store {
         candidates: Vec<CandidateFile>,
         request: &SyncRequest,
     ) -> Result<(Vec<CandidateFile>, bool)> {
+        if self.rebuild_required()? {
+            return Ok((candidates, false));
+        }
         let Some(state) = self.load_sync_resume_state()? else {
             return Ok((candidates, false));
         };
@@ -493,6 +504,27 @@ impl Store {
             ));
         }
 
+        // Rebuild-required runs deliberately rediscover the full corpus instead of trusting a
+        // checkpoint created for the previous index format. Changed-file detection still
+        // advances a budget-only rebuild across invocations, so clear its matching checkpoint
+        // after the last batch finishes.
+        if request.budget_files.is_some()
+            && self
+                .load_sync_resume_state()?
+                .is_some_and(|state| state.request == *request)
+        {
+            self.clear_sync_resume_state()?;
+            return Ok(build_sync_resume(
+                state_path,
+                "completed",
+                request.budget_files,
+                false,
+                processed_files,
+                0,
+                Some("Budgeted sync completed and saved state was cleared.".to_string()),
+            ));
+        }
+
         Ok(build_sync_resume(
             state_path,
             "idle",
@@ -556,6 +588,19 @@ impl Store {
         request: &SyncRequest,
         cooldown_policy: &SyncCooldownPolicy,
     ) -> Result<SyncCooldownDecision> {
+        if self.rebuild_required()? {
+            return Ok(SyncCooldownDecision {
+                cooldown: SyncCooldown {
+                    state: "bypassed".to_string(),
+                    interval: cooldown_policy.interval.clone(),
+                    interval_seconds: cooldown_policy.interval_seconds,
+                    last_completed_at: None,
+                    next_allowed_at: None,
+                    reason: Some("索引格式已升级，需要全量重建".to_string()),
+                },
+                should_skip: false,
+            });
+        }
         let refresh_state = self
             .load_sync_refresh_state()?
             .filter(|state| state.request == *request);
@@ -836,7 +881,7 @@ fn emit_progress(progress: &mut Option<&mut dyn SyncProgressObserver>, event: Sy
 }
 
 fn heartbeat_if_needed(lock: &mut Option<&mut SyncLockGuard>, index: usize) -> Result<()> {
-    if index % 32 != 0 {
+    if !index.is_multiple_of(32) {
         return Ok(());
     }
     if let Some(lock) = lock.as_deref_mut() {
@@ -1389,7 +1434,16 @@ fn merge_aggregate_text(existing: &str, delta: &str) -> String {
     if delta.trim().is_empty() {
         return existing.to_string();
     }
-    normalize_whitespace(format!("{existing}\n{delta}"))
+    let merged = normalize_whitespace(format!("{existing}\n{delta}"));
+    take_last_chars(&merged, 32_000)
+}
+
+fn take_last_chars(text: &str, max_chars: usize) -> String {
+    let count = text.chars().count();
+    if count <= max_chars {
+        return text.to_string();
+    }
+    text.chars().skip(count - max_chars).collect()
 }
 
 fn normalize_whitespace(text: String) -> String {

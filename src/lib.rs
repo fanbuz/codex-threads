@@ -1,7 +1,5 @@
-mod app_state;
 pub mod cli;
 pub mod commands;
-mod experimental;
 pub mod index;
 pub mod output;
 pub mod parser;
