@@ -13,10 +13,10 @@ Use `codex-threads` as a read-only local history index. Treat every result as a 
 - Unknown session: run a bounded sync, then search messages first. Search threads for broader topic matching and events only when execution evidence matters.
 - Need a handoff package: run `codex-threads --json threads context <session-id>` after identifying the candidate.
 
-Start with bounded commands unless the user explicitly needs the complete corpus:
+Start with bounded commands unless the user explicitly needs the complete corpus. `--recent` accepts a count of the most recently modified session files, not a duration:
 
 ```bash
-codex-threads --json sync --recent 30d --budget-files 500
+codex-threads --json sync --recent 30 --budget-files 500
 codex-threads --json messages search "exact phrase" --limit 20
 codex-threads --json threads search "project topic" --limit 20
 codex-threads --json events search "tool or event evidence" --limit 20
