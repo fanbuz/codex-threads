@@ -53,15 +53,9 @@ fn workflows_and_readme_are_aligned_with_codex_threads() {
     assert!(release.contains("codex-threads-windows-x64.zip"));
     assert!(release.contains("Install Rust toolchain (Windows)"));
     assert!(release.contains("Package binary (Windows)"));
-    assert!(release.contains("notify-homebrew-tap"));
-    assert!(release.contains("repository_dispatch"));
-    assert!(release.contains("HOMEBREW_TAP_TOKEN"));
-    assert!(release.contains("Check tap dispatch token"));
-    assert!(release.contains("steps.token.outputs.available == 'true'"));
-    assert!(release.contains("\"source_repository\": \"${GITHUB_REPOSITORY}\""));
-    assert!(release.contains("\"tag\": \"${TAG_NAME}\""));
-    assert!(release.contains("\"formula_name\": \"codex-threads\""));
-    assert!(!release.contains("if: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}"));
+    assert!(!release.contains("notify-homebrew-tap"));
+    assert!(!release.contains("repository_dispatch"));
+    assert!(!release.contains("HOMEBREW_TAP_TOKEN"));
     assert!(!release.contains("render_homebrew_formula.py"));
     assert!(!release.contains("Checkout Homebrew tap"));
 }

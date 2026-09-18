@@ -184,10 +184,9 @@ cargo install --path . --force
 推送 `vX.Y.Z` tag 后，GitHub Actions 会自动：
 
 - 构建并发布 GitHub Release 预编译包
-- 向 `fanbuz/homebrew-tap` 发送 `repository_dispatch`
-- 由 tap 仓库读取 release 元数据并自动同步 `codex-threads` formula
+- 由 `fanbuz/homebrew-tap` 定期检查最新 GitHub Release 并同步 `codex-threads` formula
 
-要启用这条链路，需要在主仓库配置 `HOMEBREW_TAP_TOKEN` secret，用它向 `fanbuz/homebrew-tap` 发送 dispatch 事件。
+Tap 同步由 Tap 仓库自行执行，不需要在主仓库保存跨仓库 token，因此发布不会因 Tap 凭据失效而失败。
 
 ## Quick Start
 
