@@ -23,6 +23,8 @@ struct ThreadContextResponse {
 
 #[derive(Debug, Serialize)]
 struct ContextBudget {
+    unit: &'static str,
+    applies_to: &'static str,
     limit: usize,
     used: usize,
 }
@@ -48,6 +50,8 @@ pub fn thread(store: &Store, args: &ContextArgs) -> Result<Rendered> {
         source,
         handoff,
         budget: ContextBudget {
+            unit: "utf8_bytes",
+            applies_to: "text",
             limit: args.budget,
             used: text.len(),
         },

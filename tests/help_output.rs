@@ -8,7 +8,7 @@ fn top_level_help_shows_command_descriptions() {
         .arg("--help")
         .assert()
         .success()
-        .stdout(predicate::str::contains("CLI 版本: 0.1.0"))
+        .stdout(predicate::str::contains("CLI 版本: 0.1.1"))
         .stdout(predicate::str::contains("--enable-experimentals").not())
         .stdout(predicate::str::is_match(r"(?m)^\s*sync\s+增量扫描会话文件并更新索引$").unwrap())
         .stdout(
@@ -34,7 +34,10 @@ fn nested_help_shows_subcommand_descriptions() {
         )
         .stdout(predicate::str::is_match(r"(?m)^\s*read\s+读取指定线程$").unwrap())
         .stdout(
-            predicate::str::is_match(r"(?m)^\s*context\s+生成接续新会话的预算化上下文包$").unwrap(),
+            predicate::str::is_match(
+                r"(?m)^\s*context\s+生成有长度限制的历史摘录（不恢复任务状态）$",
+            )
+            .unwrap(),
         );
 
     Command::cargo_bin("codex-threads")

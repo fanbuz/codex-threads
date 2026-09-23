@@ -1,0 +1,5 @@
+{"timestamp": "2026-09-01T10:00:00Z", "type": "session_meta", "payload": {"id": "retrieval-zh", "cwd": "/workspace/retrieval-fixture"}}
+{"timestamp": "2026-09-01T10:00:01Z", "type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "请排查中文检索中的断线重连问题"}]}}
+{"timestamp": "2026-09-01T10:00:02Z", "type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "修复 reconnect_policy 并保留精确关键词。"}]}}
+{"timestamp": "2026-09-01T10:00:03Z", "type": "response_item", "payload": {"type": "function_call", "name": "shell", "call_id": "retrieval-zh-call", "arguments": "{\"command\": \"check reconnect_policy\"}"}}
+{"timestamp": "2026-09-01T10:00:04Z", "type": "response_item", "payload": {"type": "function_call_output", "call_id": "retrieval-zh-call", "output": "Error: ECONNRESET at reconnect_policy"}}

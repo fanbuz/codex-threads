@@ -3,8 +3,8 @@ use serde::Serialize;
 
 use crate::cli::{EventSearchArgs, MessageSearchArgs, ThreadSearchArgs};
 use crate::index::{
-    EventSearchFilters, EventSearchHit, MessageSearchFilters, MessageSearchHit, SearchMeta, Store,
-    ThreadSearchFilters, ThreadSearchHit,
+    EventSearchFilters, EventSearchHit, MessageSearchFilters, MessageSearchHit, SearchCoverage,
+    SearchMeta, Store, ThreadSearchFilters, ThreadSearchHit,
 };
 use crate::output::Rendered;
 
@@ -15,6 +15,7 @@ struct MessageSearchResponse {
     query: String,
     count: usize,
     search: SearchMeta,
+    coverage: SearchCoverage,
     filters: MessageSearchFilters,
     results: Vec<MessageSearchHit>,
 }
@@ -26,6 +27,7 @@ struct ThreadSearchResponse {
     query: String,
     count: usize,
     search: SearchMeta,
+    coverage: SearchCoverage,
     filters: ThreadSearchFilters,
     results: Vec<ThreadSearchHit>,
 }
@@ -37,6 +39,7 @@ struct EventSearchResponse {
     query: String,
     count: usize,
     search: SearchMeta,
+    coverage: SearchCoverage,
     filters: EventSearchFilters,
     results: Vec<EventSearchHit>,
 }
@@ -55,6 +58,7 @@ pub fn messages(store: &Store, args: &MessageSearchArgs) -> Result<Rendered> {
         query: args.common.query.clone(),
         count: report.results.len(),
         search: report.search.clone(),
+        coverage: store.search_coverage(args.common.session.as_deref())?,
         filters: filters.clone(),
         results: report.results.clone(),
     };
@@ -62,12 +66,16 @@ pub fn messages(store: &Store, args: &MessageSearchArgs) -> Result<Rendered> {
     let mut lines = vec![
         format!("消息搜索: {}", args.common.query),
         format!("命中条数: {}", response.count),
+        format!("检索范围: {}", response.coverage.notice),
     ];
     for item in report.results {
         lines.push(format!(
             "- [{}] {} {}",
             item.session_id, item.role, item.snippet
         ));
+        if let Some(path) = item.source.path.as_deref() {
+            lines.push(format!("  来源: {}", path));
+        }
     }
 
     Rendered::new(lines.join("\n"), &response).map(|rendered| rendered.with_duration_after_line(1))
@@ -88,6 +96,7 @@ pub fn threads(store: &Store, args: &ThreadSearchArgs) -> Result<Rendered> {
         query: args.common.query.clone(),
         count: report.results.len(),
         search: report.search.clone(),
+        coverage: store.search_coverage(args.common.session.as_deref())?,
         filters: filters.clone(),
         results: report.results.clone(),
     };
@@ -95,12 +104,16 @@ pub fn threads(store: &Store, args: &ThreadSearchArgs) -> Result<Rendered> {
     let mut lines = vec![
         format!("线程搜索: {}", args.common.query),
         format!("命中条数: {}", response.count),
+        format!("检索范围: {}", response.coverage.notice),
     ];
     for item in report.results {
         lines.push(format!(
             "- [{}] {} {}",
             item.session_id, item.title, item.snippet
         ));
+        if let Some(path) = item.source.path.as_deref() {
+            lines.push(format!("  来源: {}", path));
+        }
     }
 
     Rendered::new(lines.join("\n"), &response).map(|rendered| rendered.with_duration_after_line(1))
@@ -120,6 +133,7 @@ pub fn events(store: &Store, args: &EventSearchArgs) -> Result<Rendered> {
         query: args.common.query.clone(),
         count: report.results.len(),
         search: report.search.clone(),
+        coverage: store.search_coverage(args.common.session.as_deref())?,
         filters: filters.clone(),
         results: report.results.clone(),
     };
@@ -127,12 +141,16 @@ pub fn events(store: &Store, args: &EventSearchArgs) -> Result<Rendered> {
     let mut lines = vec![
         format!("事件搜索: {}", args.common.query),
         format!("命中条数: {}", response.count),
+        format!("检索范围: {}", response.coverage.notice),
     ];
     for item in report.results {
         lines.push(format!(
             "- [{}] {} {}",
             item.session_id, item.event_type, item.snippet
         ));
+        if let Some(path) = item.source.path.as_deref() {
+            lines.push(format!("  来源: {}", path));
+        }
     }
 
     Rendered::new(lines.join("\n"), &response).map(|rendered| rendered.with_duration_after_line(1))

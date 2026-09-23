@@ -10,7 +10,7 @@ pub use store::Store;
 pub use types::{
     DoctorIssue, DoctorRepairAction, DoctorReport, EventRecord, EventSearchFilters, EventSearchHit,
     LocalSessionSource, MessageRecord, MessageSearchFilters, MessageSearchHit, NativeThreadHandoff,
-    StatusSummary, SyncCooldown, SyncCooldownPolicy, SyncFailure, SyncLockStatus, SyncPlan,
-    SyncPreflight, SyncReport, SyncRequest, SyncResume, SyncScope, SyncStats, ThreadContextRead,
-    ThreadRead, ThreadRecord, ThreadSearchFilters, ThreadSearchHit,
+    SearchCoverage, StatusSummary, SyncCooldown, SyncCooldownPolicy, SyncFailure, SyncLockStatus,
+    SyncPlan, SyncPreflight, SyncReport, SyncRequest, SyncResume, SyncScope, SyncStats,
+    ThreadContextRead, ThreadRead, ThreadRecord, ThreadSearchFilters, ThreadSearchHit,
 };

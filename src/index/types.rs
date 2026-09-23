@@ -193,6 +193,18 @@ pub struct SyncPlan {
     pub preflight: SyncPreflight,
 }
 
+/// Describes the queried index, never guarantees coverage of the live session corpus.
+#[derive(Debug, Clone, Serialize)]
+pub struct SearchCoverage {
+    pub state: &'static str,
+    pub index_path: String,
+    pub indexed_threads: usize,
+    pub corpus_verified: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_session_indexed: Option<bool>,
+    pub notice: &'static str,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct StatusSummary {
     pub index_path: String,
