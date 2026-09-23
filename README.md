@@ -1,339 +1,114 @@
 # codex-threads
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
-[![Version: 0.1.0](https://img.shields.io/badge/version-0.1.0-blue.svg)](./Cargo.toml)
+[![Version: 0.1.1](https://img.shields.io/badge/version-0.1.1-blue.svg)](./Cargo.toml)
 
-`codex-threads` 是 Codex 原生线程能力的本地历史检索补充层。它把 `~/.codex/sessions` 下的会话整理成可搜索、可读取、可供脚本消费的本地索引。
+在不知道会话 ID 时，从本地 Codex 历史中找到讨论、报错和执行证据。
 
-当前版本：`0.1.0`，详见 [ROADMAP.md](./ROADMAP.md)。
+`codex-threads` 将 `~/.codex/sessions` 整理为本地 SQLite 索引，支持全文检索、离线读取和 JSON 输出。它是 Codex 原生任务能力的历史检索补充层。
 
-> [!IMPORTANT]
-> Codex 原生能力负责创建、列举、读取、续聊、fork、handoff、置顶和归档线程。`codex-threads` 不再扩展线程生命周期管理，只保留原生能力尚未覆盖的跨历史全文检索、事件证据、离线读取和结构化交接。
+## 快速开始
 
-它面向两类使用方式：
-
-- 人类跨全部本地历史检索消息和执行证据
-- Agent 用 `--json` 找到候选 `session_id`，再交给 Codex 原生线程能力继续处理
-
-## Project Background
-
-- 本项目聚焦一个简单问题：在不复制 Codex 原生线程管理的前提下，把本地历史变成可复用的检索数据层。
-- CLI 设计参考 OpenAI Codex 官方用例文档 [Create a CLI Codex can use](https://developers.openai.com/codex/use-cases/agent-friendly-clis)，重点放在稳定命令面、清晰帮助输出和结构化 JSON。
-- 也感谢 [Wangnov/cli-design-framework](https://github.com/Wangnov/cli-design-framework) 提供的 skill 指导与命令行设计思路参考。
-- 工具默认读取 `~/.codex/sessions`，把线程、消息和事件增量索引到本地 SQLite，适合脚本和 agent 二次消费。
-
-## Features
-
-- 增量扫描 `~/.codex/sessions`
-- 索引健康检查与安全修复入口
-- 线程、消息、事件三类搜索与读取接口
-- 提供稳定的 `session_id` 和 `--json` 输出，用于与 Codex 原生线程能力交接
-- 默认提供便于直接阅读的命令行输出，以及 `--json` 结构化输出
-- 除 `status` / `help` / `--version` 外，命令会附带耗时统计
-- SQLite 全文索引优先，必要时回退到普通搜索
-- 适合被其他 Codex 线程直接调用
-
-## 从旧版本升级到 0.1.0
-
-`0.1.0` 会把旧索引迁移到更紧凑的 v2 格式。索引只是可重建的派生数据：首次打开旧索引时，CLI 会清空旧格式内容并标记需要重建，不会修改 `~/.codex/sessions` 原始会话。升级后运行一次完整同步：
+先更新索引。默认有 30 分钟同步冷却；需要立即纳入新内容时使用 `sync --force`。
 
 ```bash
-codex-threads --json sync --force
+codex-threads --json sync
 ```
 
-可以用 `codex-threads --json status` 或 `codex-threads --json doctor` 检查 `index_format_version` 和 `rebuild_required`。完整同步成功后，`rebuild_required` 会恢复为 `false`。
+检查同步结果的 `partial` 和 `failures`；范围化或部分同步不能当作全部历史已索引。
 
-此版本还包含两项有意的不兼容变化：
-
-- 删除 `--enable-experimentals` 和 `experimental restore-app-thread`，不再写 Codex App 私有状态；线程创建、续聊、fork、置顶和归档统一交给 Codex 原生能力。
-- 搜索与上下文 JSON 新增 `source` 和 `handoff`，其中的 `candidate_thread_id` 必须先由 Codex 原生线程能力确认；原生能力不可用时再执行 `local_fallback`。
-
-## 安装
-
-直接在仓库根目录运行：
+**找过去的讨论**：记得关键词，但不记得在哪个会话里。
 
 ```bash
-make install-local
+codex-threads messages search "断线重连" --limit 10
 ```
 
-或手动安装：
+**找执行证据**：想知道某个报错当时出现在哪里。
 
 ```bash
-cargo install --path . --force
+codex-threads events search "ECONNRESET" --limit 10
 ```
 
-默认索引目录为 `~/.codex/threads-index`，默认会话目录为 `~/.codex/sessions`。
+结果给出候选 `session_id`、命中内容和来源路径。把 ID 交给 Codex 原生能力确认并读取或继续任务；原生访问不可用时，可以离线核对索引里的内容：
 
-### Homebrew
+```bash
+codex-threads messages read <session-id> --limit 20
+codex-threads events read <session-id> --limit 20
+```
+
+Agent 在命令前加 `--json` 即可获得结构化结果。**未命中只说明当前索引内没有返回结果，不代表全部历史中不存在。** 搜索输出会提示空索引、需重建或指定会话未索引等状态。
+
+## 什么时候使用
+
+- 不知道会话 ID，需要跨历史消息或执行事件搜索：使用本工具。
+- 已知 Codex 任务，想读取、续聊、fork 或归档：优先使用原生能力。
+- 原生访问不可用，但本地会话或索引还在：使用本地读取兜底。
+
+`threads search` 只查标题、路径和受限的代表性消息，不能代替消息全文检索。`threads context` 保留为确定性历史摘录，不识别最终决策或未完成事项，不保证恢复完整任务状态。
+
+## 安装与升级
 
 ```bash
 brew tap fanbuz/tap
 brew install fanbuz/tap/codex-threads
 ```
 
-升级：
+已安装时：
 
 ```bash
+brew update
 brew upgrade codex-threads
+codex-threads --version
 ```
 
-当前支持平台直接安装预编译二进制：
+支持平台直接安装预编译二进制，否则回退源码构建；源码构建需要 Rust 工具链。也可运行 `cargo install --path . --force` 或 `make install-local`。
 
-- macOS arm64
-- macOS x64
-- Linux x64
-- Windows x64
+### 从旧版升级
 
-支持平台直接安装预编译二进制，否则回退源码构建；如果当前平台暂时没有对应的预编译包，则需要本地可用的 Rust 工具链。
+`0.1.1` 沿用 `0.1.0` 的 v2 索引格式，保留已有命令与 JSON 字段，新增检索范围和摘录预算说明字段。无需因本次升级重建索引。
 
-### 版本规则
-
-- 项目在 `1.0.0` 之前使用 `0.y.z`：`y` 表示产品边界或不兼容契约的变化，`z` 表示兼容修复。
-- `0.1.0` 是“本地历史检索补充层”的首个定位版本。
-- 日期和 Codex 兼容快照放在 release notes 与兼容性记录中，不进入版本号。
+从 `0.0.x` 升级时会清空旧格式的派生索引并要求重建，不修改原始会话。运行一次 `codex-threads --json sync --force`，再用 `codex-threads --json status` 确认 `rebuild_required=false`。旧的实验性私有状态写入功能已移除。
 
 ## 各平台使用说明
 
 ### macOS
 
-最省事的方式是直接用 Homebrew：
-
-```bash
-brew tap fanbuz/tap
-brew install fanbuz/tap/codex-threads
-```
-
-升级：
-
-```bash
-brew upgrade codex-threads
-```
-
-如果你不走 Homebrew，也可以从 GitHub Releases 下载对应平台的预编译包：
-
-- Apple Silicon: `codex-threads-macos-arm64.tar.gz`
-- Intel: `codex-threads-macos-x64.tar.gz`
-
-默认目录：
-
-- 会话目录：`~/.codex/sessions`
-- 索引目录：`~/.codex/threads-index`
-
-常用命令：
-
-```bash
-codex-threads --json sync
-codex-threads messages search "build a CLI" --limit 20
-codex-threads threads read <session-id> --limit 20
-```
+支持 macOS arm64 和 macOS x64，推荐使用上面的 Homebrew 安装方式。也可从 [Releases](https://github.com/fanbuz/codex-threads/releases) 下载 `codex-threads-macos-arm64.tar.gz` 或 `codex-threads-macos-x64.tar.gz`。
 
 ### Linux
 
-Linux x64 可以直接从 GitHub Releases 下载：
+Linux x64 下载 `codex-threads-linux-x64.tar.gz`，解压后把二进制放入 `PATH`。
 
-- `codex-threads-linux-x64.tar.gz`
-
-解压后把二进制放到你的 `PATH` 里即可；如果你更习惯本地构建，也可以在仓库根目录运行：
-
-```bash
-cargo install --path . --force
-```
-
-默认目录：
-
-- 会话目录：`~/.codex/sessions`
-- 索引目录：`~/.codex/threads-index`
-
-常用命令：
-
-```bash
-codex-threads --json sync
-codex-threads --json messages search "build a CLI" --limit 20
-codex-threads events read <session-id> --limit 50
-```
+macOS / Linux 默认会话目录是 `~/.codex/sessions`，索引目录是 `~/.codex/threads-index`。
 
 ### Windows
 
-Windows x64 可以直接从 GitHub Releases 下载：
-
-- `codex-threads-windows-x64.zip`
-
-解压后在 PowerShell 里运行：
+Windows x64 下载 `codex-threads-windows-x64.zip`，解压后在 PowerShell 运行：
 
 ```powershell
 .\codex-threads.exe --json sync
-.\codex-threads.exe messages search "build a CLI" --limit 20
-.\codex-threads.exe threads read <session-id> --limit 20
+.\codex-threads.exe messages search "keyword" --limit 10
 ```
 
-如果你想自己构建，可以先安装 Rust 的 MSVC toolchain，然后在仓库根目录运行：
+默认会话目录为 `C:\Users\<you>\.codex\sessions`，索引目录为 `C:\Users\<you>\.codex\threads-index`。各平台均可使用 `--sessions-dir` 与 `--index-dir` 覆盖目录。
 
-```powershell
-cargo install --path . --force
-```
+## 文档与维护
 
-默认目录：
+- [命令参考](docs/commands.md)：过滤条件、同步范围、健康检查、JSON 契约和历史摘录。
+- [维护边界与路线图](ROADMAP.md)：本版本范围和后续扩展条件。
+- [固定检索验收](docs/retrieval-validation.md)：脱敏样本、预期命中与端到端验证。
+- [性能基准](docs/benchmarks/0.1.1.md)：同一快照下的新旧版本对比。
+- [本地价值记录模板](docs/value-log.md)：手工记录实际需求，无遥测。
 
-- 会话目录：`C:\Users\<you>\.codex\sessions`
-- 索引目录：`C:\Users\<you>\.codex\threads-index`
-
-如果你的 Codex 会话不在默认位置，也可以继续用 `--sessions-dir` 和 `--index-dir` 显式覆盖。
-
-### Release Automation
-
-推送 `vX.Y.Z` tag 后，GitHub Actions 会自动：
-
-- 构建并发布 GitHub Release 预编译包
-- 由 `fanbuz/homebrew-tap` 定期检查最新 GitHub Release 并同步 `codex-threads` formula
-
-Tap 同步由 Tap 仓库自行执行，不需要在主仓库保存跨仓库 token，因此发布不会因 Tap 凭据失效而失败。
-
-## Quick Start
-
-```bash
-codex-threads --json sync
-codex-threads --json doctor
-codex-threads --json messages search "build a CLI" --limit 10
-codex-threads --json events search "agent_reasoning" --limit 10
-codex-threads --json threads read <session-id> --limit 20
-codex-threads threads context <session-id> --budget 4000
-```
-
-## 命令
-
-```bash
-codex-threads sync
-codex-threads --json sync
-codex-threads sync --since 2026-04-12T10:30:00Z
-codex-threads sync --path session-beta
-codex-threads --json sync --recent 20
-codex-threads --json sync --budget-files 200
-codex-threads --json sync --cooldown 45m
-codex-threads sync --force
-codex-threads doctor
-codex-threads doctor --repair
-codex-threads messages search "build a CLI" --limit 20
-codex-threads events search "agent_reasoning" --limit 20
-codex-threads --json threads search "websocket reconnect"
-codex-threads threads read session-alpha --limit 20
-codex-threads threads context session-alpha --budget 4000
-codex-threads messages read <session-id> --limit 50
-codex-threads events read <session-id> --limit 50
-codex-threads status
-```
-
-全局参数：
-
-- `--json` 输出纯 JSON
-- `--sessions-dir PATH` 覆盖默认会话目录
-- `--index-dir PATH` 覆盖默认索引目录
-
-`sync` 范围参数：
-
-- `--since RFC3339` 只同步不早于该时间的会话文件
-- `--until RFC3339` 只同步不晚于该时间的会话文件
-- `--path PATH` 只同步路径命中该片段的会话文件
-- `--recent N` 只同步最近活跃的 N 个会话文件
-- `--budget-files N` 单次最多处理 N 个需要刷新的会话文件；超出部分会保存为本地续跑状态，等待下次同参数 `sync` 继续处理
-- `--cooldown INTERVAL` 同范围同步的冷却时间，默认 `30m`，支持 `s` / `m` / `h` 单位
-- `--force` 忽略冷却时间，立即执行本次同步
-
-`doctor` 参数：
-
-- `--repair` 清理可安全修复的本地状态文件问题，例如过期同步锁、损坏的续跑状态和损坏的冷却状态
-
-搜索过滤参数：
-
-- 三类 `search` 都支持：`--since`、`--until`、`--session`
-- `messages search` 额外支持：`--role`
-- `threads search` 额外支持：`--cwd`、`--path`
-- `events search` 额外支持：`--event-type`
-
-示例：
-
-```bash
-codex-threads messages search "CLI" --role user --session session-alpha
-codex-threads threads search "search fallback" --cwd alpha-repo --since 2026-04-12T09:00:00Z
-codex-threads --json events search "agent" --event-type agent_reasoning --until 2026-04-12T11:00:00Z
-```
-
-说明：
-
-- 时间过滤按 RFC3339 时间字符串比较，适合直接复制会话里的时间戳来筛选
-- `--cwd` 和 `--path` 是大小写不敏感的模糊匹配
-- `--json` 输出会额外回显本次命中的 `filters`，方便脚本和 agent 继续处理
-- `--json` 搜索结果还会补充 `search` 元信息，说明这次命中走的是 `fts` 还是 `like`、是否进入 expanded 查询，以及当前排序口径
-- 每条搜索结果会带上 `explain`，用来说明命中了哪些字段、覆盖了多少 query term、是否保留了原始字面量命中
-
-`threads context` 用于给新会话生成可控长度的接续上下文包：
-
-- `--budget N` 控制输出字符预算，默认 `4000`
-- `--messages N` 最多纳入最近 N 条消息，默认 `20`
-- `--events N` 最多纳入 N 条事件证据，默认 `20`
-- `--no-events` 不纳入事件证据，只输出线程元信息和最近消息
-- 默认会优先保留 `function_call` / `function_call_output` 等执行证据，再补充最近事件
-- 这是确定性抽取，不调用 LLM；如果需要完整原文，继续使用 `threads read`、`messages read` 或 `events read`
-
-输出约定：
-
-- 默认命令行输出会在 `sync`、`search`、`read` 等操作末尾追加 `耗时: ...`
-- 耗时会按时长动态显示为 `ms` 或 `s`
-- `--json` 模式不输出格式化耗时文本，只提供稳定字段 `duration_ms`
-- `sync` 会先输出一段“同步范围”摘要，明确本次时间范围、路径过滤、最近活跃限制和命中的候选文件数
-- `sync` 会输出一段“同步冷却”摘要，说明当前冷却间隔、是否命中冷却、最近一次成功刷新时间，以及下次允许刷新时间
-- `sync` 在真正执行前会先输出一段同步预检摘要，说明本次检测到的文件规模、变更数量和建议动作
-- `--json sync` 会额外返回 `scope`、`cooldown`、`preflight` 和 `resume` 字段，方便 agent 先理解这次同步实际覆盖的范围，以及是应当跳过、继续执行，还是进入续跑
-- `sync` 结果会额外回显本次命中的写入策略统计，例如尾部追加、整条重建和回退重建，方便快速判断大 session 是否真的走了增量路径
-- 长时间运行的 `sync` 会在 `stderr` 持续输出阶段进度；非交互环境下使用稳定的阶段文本，交互式终端下会退化成单行进度条样式
-- `--json sync` 在保留 `stderr` 进度反馈的同时，还会额外返回 `progress` 字段，方便 agent 在结束后读取本次阶段和进度汇总
-- 同一个索引目录同一时间只允许一个 `sync` 写任务运行；如果命中活跃锁，新的 `sync` 会直接退出并提示已有同步正在进行
-- `sync` 会自动接管超过心跳窗口的过期锁，避免异常退出后的锁文件长期阻塞后续同步
-- `status` 会额外展示当前同步锁状态；`--json status` 则会返回 `status.sync_lock` 结构，方便 agent 判断索引目录是否正被同步占用
-- `doctor` 会汇总当前索引健康状态，输出问题列表、修复记录和操作建议；`--json doctor` 会返回稳定的 `doctor` 结构，方便 agent 自动消费
-- `doctor --repair` 只处理低风险、本地可恢复的问题；像线程计数漂移这类需要重建索引的问题，当前版本会明确提示重新同步而不会自动改写主数据
-- 范围化 `sync` 只更新命中范围，不会顺带清理范围外历史；如果要做完整清理，请直接运行不带范围参数的 `sync`
-- 当 `--budget-files` 命中预算上限时，本次 `sync` 会返回 `partial=true` 和 `resume.state=saved`，并在索引目录旁写入 `sync.resume.json`
-- 后续只要再次用相同参数执行 `sync`，CLI 会自动从 `sync.resume.json` 继续，直到 `resume.state=completed` 后清理这个本地状态文件
-- 成功完成一次 `sync` 后，CLI 会在索引目录旁写入 `sync.refresh.json` 记录最近一次刷新时间；同参数的后续 `sync` 默认会在 `30m` 冷却窗口内直接跳过，避免 agent 在短时间内重复刷新
-
-## 设计要点
-
-- 增量同步：仅重建新增或变更过的 `.jsonl` 会话
-- 大 session 优化：对持续追加的会话优先走 append-tail 增量刷新，遇到截断或改写时再回退整条重建
-- SQLite 索引：线程、消息、事件分表存储
-- FTS 优先：若 SQLite 支持 FTS5 则用全文检索，否则自动回退到 `LIKE`
-- 线程聚合搜索：按标题、路径和代表性消息内容搜索整条线程，聚合文本设有上限
-- 事件索引默认保留工具调用、工具结果和推理等执行证据，排除重复消息与低信号生命周期事件
-
-## 代码结构
-
-- `src/commands/`：命令层，负责把 CLI 输入转成具体的搜索、读取和同步调用
-- `src/index/types.rs`：索引域的公共数据结构，集中放同步统计、读取结果和搜索结果模型
-- `src/index/store/`：索引存储与核心流程
-  - `mod.rs`：`Store` 入口、状态汇总与基础统计
-  - `resume.rs`：预算化同步的本地续跑状态保存与清理
-  - `sync.rs`：同步扫描、会话重建与索引写入
-  - `search.rs`：线程、消息、事件三类搜索与过滤逻辑
-  - `read.rs`：线程、消息、事件读取逻辑
-- `src/parser/`：把 Codex 会话 `jsonl` 解析成线程、消息和事件模型
-- `src/output.rs`：文本输出、JSON 响应和耗时展示
-
-这套结构的目标是让同步、搜索、读取、解析和输出各自有稳定落点，避免继续把复杂度堆回单个超大文件。
-
-## 适合的工作流
-
-1. 先运行 `codex-threads --json sync`
-2. 用 `messages search`、`threads search` 或 `events search` 找线索
-3. 将命中的 `session_id` 交给 Codex 原生线程能力确认、读取或续聊
-4. 原生线程不可用或需要确定性上下文时，再回退到 `threads read`、`messages read`、`events read` 或 `threads context`
+发布流程：推送 `vX.Y.Z` tag 后构建四个平台的二进制并发布 GitHub Release；`fanbuz/homebrew-tap` 的同步工作流更新 formula。版本采用 `0.y.z`，不兼容边界变化增加 `y`，兼容修复增加 `z`。
 
 ## Contributing
 
-欢迎提交 issue 和 PR。开始之前请先阅读 [CONTRIBUTING.md](./CONTRIBUTING.md)、[CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md) 和 [SECURITY.md](./SECURITY.md)。
-
-建议本地提交前至少运行：
+提交前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)、[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) 和 [SECURITY.md](SECURITY.md)。本项目优先接受会话格式兼容、检索正确性、索引稳定性和必要的分发修复。
 
 ```bash
 cargo fmt --all
-cargo test
+cargo test --locked
 ```
+
+CLI 设计参考 [OpenAI 的 Agent-friendly CLI 用例](https://developers.openai.com/codex/use-cases/agent-friendly-clis)，并感谢 [Wangnov/cli-design-framework](https://github.com/Wangnov/cli-design-framework) 的命令行设计思路。

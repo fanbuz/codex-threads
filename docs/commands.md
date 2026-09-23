@@ -1,0 +1,151 @@
+# 命令参考
+
+## 命令
+
+```bash
+codex-threads sync
+codex-threads --json sync
+codex-threads sync --since 2026-04-12T10:30:00Z
+codex-threads sync --path session-beta
+codex-threads --json sync --recent 20
+codex-threads --json sync --budget-files 200
+codex-threads --json sync --cooldown 45m
+codex-threads sync --force
+codex-threads doctor
+codex-threads doctor --repair
+codex-threads messages search "build a CLI" --limit 20
+codex-threads events search "agent_reasoning" --limit 20
+codex-threads --json threads search "websocket reconnect"
+codex-threads threads read session-alpha --limit 20
+codex-threads threads context session-alpha --budget 4000
+codex-threads messages read <session-id> --limit 50
+codex-threads events read <session-id> --limit 50
+codex-threads status
+```
+
+全局参数：
+
+- `--json` 输出纯 JSON
+- `--sessions-dir PATH` 覆盖默认会话目录
+- `--index-dir PATH` 覆盖默认索引目录
+
+`sync` 范围参数：
+
+- `--since RFC3339` 只同步不早于该时间的会话文件
+- `--until RFC3339` 只同步不晚于该时间的会话文件
+- `--path PATH` 只同步路径命中该片段的会话文件
+- `--recent N` 只同步最近活跃的 N 个会话文件
+- `--budget-files N` 单次最多处理 N 个需要刷新的会话文件；超出部分会保存为本地续跑状态，等待下次同参数 `sync` 继续处理
+- `--cooldown INTERVAL` 同范围同步的冷却时间，默认 `30m`，支持 `s` / `m` / `h` 单位
+- `--force` 忽略冷却时间，立即执行本次同步
+
+`doctor` 参数：
+
+- `--repair` 清理可安全修复的本地状态文件问题，例如过期同步锁、损坏的续跑状态和损坏的冷却状态
+
+搜索过滤参数：
+
+- 三类 `search` 都支持：`--since`、`--until`、`--session`
+- `messages search` 额外支持：`--role`
+- `threads search` 额外支持：`--cwd`、`--path`
+- `events search` 额外支持：`--event-type`
+
+示例：
+
+```bash
+codex-threads messages search "CLI" --role user --session session-alpha
+codex-threads threads search "search fallback" --cwd alpha-repo --since 2026-04-12T09:00:00Z
+codex-threads --json events search "agent" --event-type agent_reasoning --until 2026-04-12T11:00:00Z
+```
+
+说明：
+
+- 时间过滤按 RFC3339 时间字符串比较，适合直接复制会话里的时间戳来筛选
+- `--cwd` 和 `--path` 是大小写不敏感的模糊匹配
+- `--json` 输出会额外回显本次命中的 `filters`，方便脚本和 agent 继续处理
+- `--json` 搜索结果还会补充 `search` 元信息，说明这次命中走的是 `fts` 还是 `like`、是否进入 expanded 查询，以及当前排序口径
+- 每条搜索结果会带上 `explain`，用来说明命中了哪些字段、覆盖了多少 query term、是否保留了原始字面量命中
+
+`threads context` 生成确定性的历史摘录，不识别最终决策或未完成事项，不保证恢复完整任务状态：
+
+- `--budget N` 控制摘录正文的 UTF-8 字节预算，默认 `4000`，JSON 中仅约束 `text` 字段，不约束 `messages` / `events` 等结构化字段；普通文本末尾的耗时不计入预算
+- `--messages N` 最多纳入最近 N 条消息，默认 `20`
+- `--events N` 最多纳入 N 条事件证据，默认 `20`
+- `--no-events` 不纳入事件证据，只输出线程元信息和最近消息
+- 默认会优先保留 `function_call` / `function_call_output` 等执行证据，再补充最近事件
+- 这是确定性抽取，不调用 LLM；如果需要完整原文，继续使用 `threads read`、`messages read` 或 `events read`
+
+输出约定：
+
+- 默认命令行输出会在 `sync`、`search`、`read` 等操作末尾追加 `耗时: ...`
+- 耗时会按时长动态显示为 `ms` 或 `s`
+- `--json` 模式不输出格式化耗时文本，只提供稳定字段 `duration_ms`
+- `sync` 会先输出一段“同步范围”摘要，明确本次时间范围、路径过滤、最近活跃限制和命中的候选文件数
+- `sync` 会输出一段“同步冷却”摘要，说明当前冷却间隔、是否命中冷却、最近一次成功刷新时间，以及下次允许刷新时间
+- `sync` 在真正执行前会先输出一段同步预检摘要，说明本次检测到的文件规模、变更数量和建议动作
+- `--json sync` 会额外返回 `scope`、`cooldown`、`preflight` 和 `resume` 字段，方便 agent 先理解这次同步实际覆盖的范围，以及是应当跳过、继续执行，还是进入续跑
+- `sync` 结果会额外回显本次命中的写入策略统计，例如尾部追加、整条重建和回退重建，方便快速判断大 session 是否真的走了增量路径
+- 长时间运行的 `sync` 会在 `stderr` 持续输出阶段进度；非交互环境下使用稳定的阶段文本，交互式终端下会退化成单行进度条样式
+- `--json sync` 在保留 `stderr` 进度反馈的同时，还会额外返回 `progress` 字段，方便 agent 在结束后读取本次阶段和进度汇总
+- 同一个索引目录同一时间只允许一个 `sync` 写任务运行；如果命中活跃锁，新的 `sync` 会直接退出并提示已有同步正在进行
+- `sync` 会自动接管超过心跳窗口的过期锁，避免异常退出后的锁文件长期阻塞后续同步
+- `status` 会额外展示当前同步锁状态；`--json status` 则会返回 `status.sync_lock` 结构，方便 agent 判断索引目录是否正被同步占用
+- `doctor` 会汇总当前索引健康状态，输出问题列表、修复记录和操作建议；`--json doctor` 会返回稳定的 `doctor` 结构，方便 agent 自动消费
+- `doctor --repair` 只处理低风险、本地可恢复的问题；像线程计数漂移这类需要重建索引的问题，当前版本会明确提示重新同步而不会自动改写主数据
+- 范围化 `sync` 只更新命中范围，不会顺带清理范围外历史；如果要做完整清理，请直接运行不带范围参数的 `sync`
+- 当 `--budget-files` 命中预算上限时，本次 `sync` 会返回 `partial=true` 和 `resume.state=saved`，并在索引目录旁写入 `sync.resume.json`
+- 后续只要再次用相同参数执行 `sync`，CLI 会自动从 `sync.resume.json` 继续，直到 `resume.state=completed` 后清理这个本地状态文件
+- 成功完成一次 `sync` 后，CLI 会在索引目录旁写入 `sync.refresh.json` 记录最近一次刷新时间；同参数的后续 `sync` 默认会在 `30m` 冷却窗口内直接跳过，避免 agent 在短时间内重复刷新
+
+## 设计要点
+
+- 增量同步：仅重建新增或变更过的 `.jsonl` 会话
+- 大 session 优化：对持续追加的会话优先走 append-tail 增量刷新，遇到截断或改写时再回退整条重建
+- SQLite 索引：线程、消息、事件分表存储
+- FTS 优先：若 SQLite 支持 FTS5 则用全文检索，否则自动回退到 `LIKE`
+- 线程聚合搜索：按标题、路径和代表性消息内容搜索整条线程，聚合文本设有上限
+- 事件索引默认保留工具调用、工具结果和推理等执行证据，排除重复消息与低信号生命周期事件
+
+## 代码结构
+
+- `src/commands/`：命令层，负责把 CLI 输入转成具体的搜索、读取和同步调用
+- `src/index/types.rs`：索引域的公共数据结构，集中放同步统计、读取结果和搜索结果模型
+- `src/index/store/`：索引存储与核心流程
+  - `mod.rs`：`Store` 入口、状态汇总与基础统计
+  - `resume.rs`：预算化同步的本地续跑状态保存与清理
+  - `sync.rs`：同步扫描、会话重建与索引写入
+  - `search.rs`：线程、消息、事件三类搜索与过滤逻辑
+  - `read.rs`：线程、消息、事件读取逻辑
+- `src/parser/`：把 Codex 会话 `jsonl` 解析成线程、消息和事件模型
+- `src/output.rs`：文本输出、JSON 响应和耗时展示
+
+这套结构的目标是让同步、搜索、读取、解析和输出各自有稳定落点，避免继续把复杂度堆回单个超大文件。
+
+## 适合的工作流
+
+1. 先运行 `codex-threads --json sync`
+2. 用 `messages search`、`threads search` 或 `events search` 找线索
+3. 将命中的 `session_id` 交给 Codex 原生线程能力确认、读取或续聊
+4. 原生线程不可用或需要确定性上下文时，再回退到 `threads read`、`messages read`、`events read` 或 `threads context`
+
+
+## 搜索范围与来源
+
+三类搜索的 JSON 新增 `coverage`，不改变原有字段：
+
+| 字段 | 含义 |
+| --- | --- |
+| `state` | `empty` 索引无会话；`rebuild_required` 需要重建；`session_not_indexed` 指定 ID 不在索引；`indexed` 查询已有索引 |
+| `index_path` | 实际查询的索引文件 |
+| `indexed_threads` | 当前索引内的会话数量，不是本次命中数量 |
+| `requested_session_indexed` | 使用 `--session` 时返回该 ID 是否已索引 |
+| `corpus_verified` | 当前恒为 `false`：搜索不会扫描原始目录，不能保证全部文件或最新变化已被索引 |
+| `notice` | 对应状态的说明 |
+
+状态优先级：需要重建 → 空索引 → 指定会话未索引 → 已有索引。即使一次完整同步成功，之后原始文件仍可能变化，所以搜索不会声称当前索引覆盖全部历史。范围化同步完成也不代表全量同步完成。
+
+出现空索引时先确认 `--sessions-dir` 和 `--index-dir`。需重建或要扩大搜索范围时，沿用这两个目录参数运行不带范围限制的 `sync --force`，并检查 `partial` 和 `failures`。这些提示不会自动触发同步。
+
+文本搜索结果显示 `来源` 路径。JSON 命中保留 `source.path`、`session_id`、时间戳、消息 `text` 或事件 `summary`；可以据此核对原始文件，或通过对应的 `read` 命令读取已索引内容。事件摘要可能被截断，完整执行内容以原始会话文件为准。
+
+`budget.unit=utf8_bytes` 和 `budget.applies_to=text` 描述历史摘录预算；不是 token 数，也不是整份 JSON 的大小限制。

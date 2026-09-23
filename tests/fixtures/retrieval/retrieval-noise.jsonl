@@ -1,0 +1,5 @@
+{"timestamp": "2026-09-03T10:00:00Z", "type": "session_meta", "payload": {"id": "retrieval-noise", "cwd": "/workspace/retrieval-fixture"}}
+{"timestamp": "2026-09-03T10:00:01Z", "type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Other unrelated discussion"}]}}
+{"timestamp": "2026-09-03T10:00:02Z", "type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "No matching decision in this session."}]}}
+{"timestamp": "2026-09-03T10:00:03Z", "type": "response_item", "payload": {"type": "function_call", "name": "shell", "call_id": "retrieval-noise-call", "arguments": "{\"command\": \"check retry_budget\"}"}}
+{"timestamp": "2026-09-03T10:00:04Z", "type": "response_item", "payload": {"type": "function_call_output", "call_id": "retrieval-noise-call", "output": "Everything passed"}}

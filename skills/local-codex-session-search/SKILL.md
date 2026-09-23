@@ -1,6 +1,6 @@
 ---
 name: local-codex-session-search
-description: Search and read local Codex session history under ~/.codex/sessions when the user needs cross-history full-text search, a specific session_id or rollout, offline evidence, or a deterministic context package. Use this only to discover local candidate sessions and hand them to Codex native thread tools. Do not use it to create, fork, continue, message, pin, archive, or otherwise manage Codex threads; those requests belong to native thread tools.
+description: Search and read local Codex session history under ~/.codex/sessions when the user needs cross-history full-text search, a specific session_id or rollout, offline evidence, or a deterministic history excerpt. Use this only to discover local candidate sessions and hand them to Codex native thread tools. Do not use it to create, fork, continue, message, pin, archive, or otherwise manage Codex threads; those requests belong to native thread tools.
 ---
 
 # Local Codex Session Search
@@ -9,9 +9,11 @@ Use `codex-threads` as a read-only local history index. Treat every result as a 
 
 ## Choose the shortest path
 
-- Known `session_id`: synchronize if needed, then run `codex-threads --json threads read <session-id> --limit 20`.
+- Known native task / `session_id`: use native thread tools first. Only synchronize and read locally when native access is unavailable or the user explicitly needs local evidence.
 - Unknown session: run a bounded sync, then search messages first. Search threads for broader topic matching and events only when execution evidence matters.
-- Need a handoff package: run `codex-threads --json threads context <session-id>` after identifying the candidate.
+- Need a history excerpt: run `codex-threads --json threads context <session-id>` after identifying the candidate. This is deterministic extraction, not task-state recovery; the UTF-8 byte budget only limits JSON `text`, not the whole response.
+
+Inspect `coverage` on search responses. An empty index, an unindexed session, or zero hits is not proof that history does not exist. Search never verifies the whole live corpus. If a bounded search misses, expand synchronization to the relevant range (or the full corpus when requested), preserving directory overrides; inspect sync `partial` and `failures` before interpreting results.
 
 Start with bounded commands unless the user explicitly needs the complete corpus. `--recent` accepts a count of the most recently modified session files, not a duration:
 

@@ -272,7 +272,9 @@ fn human_readable_search_and_read_outputs_use_plain_layout() {
     assert_eq!(search_lines[0], "消息搜索: Rust and SQLite");
     assert_eq!(search_lines[1], "命中条数: 1");
     assert!(search_lines[2].starts_with("耗时: "));
-    assert!(search_lines[3].contains("session-alpha"));
+    assert!(search_lines[3].starts_with("检索范围: "));
+    assert!(search_lines[4].contains("session-alpha"));
+    assert!(search_lines[5].starts_with("  来源: "));
 
     let thread_output = Command::cargo_bin("codex-threads")
         .unwrap()
@@ -494,8 +496,10 @@ fn human_readable_events_search_uses_plain_layout() {
     assert_eq!(lines[0], "事件搜索: Planning CLI surface");
     assert_eq!(lines[1], "命中条数: 1");
     assert!(lines[2].starts_with("耗时: "));
-    assert!(lines[3].contains("session-alpha"));
-    assert!(lines[3].contains("agent_reasoning"));
+    assert!(lines[3].starts_with("检索范围: "));
+    assert!(lines[4].contains("session-alpha"));
+    assert!(lines[4].contains("agent_reasoning"));
+    assert!(lines[5].starts_with("  来源: "));
 }
 
 #[test]

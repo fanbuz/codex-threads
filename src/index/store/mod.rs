@@ -13,7 +13,7 @@ use anyhow::{Context, Result};
 use rusqlite::Connection;
 
 use super::schema::{init_schema, read_rebuild_required, write_rebuild_required};
-use super::types::StatusSummary;
+use super::types::{SearchCoverage, StatusSummary};
 
 #[derive(Debug)]
 pub struct Store {
@@ -36,6 +36,45 @@ impl Store {
             index_path,
             fts_available: schema.fts_available,
             index_format_version: schema.format_version,
+        })
+    }
+
+    pub fn search_coverage(&self, session: Option<&str>) -> Result<SearchCoverage> {
+        let indexed_threads = self.count_rows("threads")?;
+        let requested_session_indexed = session
+            .map(|id| {
+                self.conn.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM threads WHERE session_id = ?1)",
+                    [id],
+                    |row| row.get::<_, bool>(0),
+                )
+            })
+            .transpose()?;
+        let (state, notice) = if self.rebuild_required()? {
+            (
+                "rebuild_required",
+                "索引需要重建；请沿用相同目录参数运行 sync --force，不能据此判断历史是否存在。",
+            )
+        } else if indexed_threads == 0 {
+            (
+                "empty",
+                "索引中没有会话；请确认目录并运行 sync，不能据此判断历史是否存在。",
+            )
+        } else if requested_session_indexed == Some(false) {
+            (
+                "session_not_indexed",
+                "指定会话不在当前索引中；请确认会话 ID 和同步范围，不能据此判断历史是否存在。",
+            )
+        } else {
+            ("indexed", "仅查询当前已索引内容；未核验全部会话文件及其最新变化，未命中不代表全部历史中不存在。")
+        };
+        Ok(SearchCoverage {
+            state,
+            index_path: self.index_path.to_string_lossy().into_owned(),
+            indexed_threads,
+            corpus_verified: false,
+            requested_session_indexed,
+            notice,
         })
     }
 
